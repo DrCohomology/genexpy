@@ -1,0 +1,8 @@
+matplotlib~=3.8.2
+numpy~=1.25.1
+pandas~=2.0.3
+seaborn~=0.13.1
+scipy~=1.12.0
+tqdm~=4.66.1
+scikit-learn~=1.4.0
+setuptools~=67.8.0
