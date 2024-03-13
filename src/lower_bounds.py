@@ -95,5 +95,3 @@ def mmd_lowerbound(eps: float, n: int, kbar: float):
     return 1 - np.exp(- (eps - (2 * kbar / n) ** 0.5)**2 * n / (4*kbar)) #if eps > (2*kbar / n)**0.5 else np.nan
 
 
-def generalizability(mmd_distr: np.ndarray[float], eps: float) -> float:
-    return float(np.mean(mmd_distr <= eps))

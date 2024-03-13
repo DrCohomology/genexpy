@@ -1,13 +1,4 @@
-"""
-Updates proof_of_concept_2 updated to use kernel_utils1.
-
-Main differences:
-    - Reworked interface
-    - With loops to run multiple kernels and/or dsjoint-replace
-    - reworkd saved dataframe (out), with more entries
-"""
-# %% 1. Imports
-
+# %% Script
 import glob
 import imageio.v2 as iio
 import matplotlib as mpl
@@ -27,10 +18,11 @@ from sklearn.model_selection import KFold
 from time import time
 from tqdm import tqdm
 
-import src.generalizability_utils as gu
-import src.kernel_utils1 as ku
+import src.lower_bounds as gu
+import src.kernel_utils as ku
 import src.probability_distributions as prob
 import src.rankings_utils as ru
+import src.mmd as mmd
 
 DATA_DIR = Path("/home/kn/Code/Generalizability-of-experimental-comparisons/data/benchmark_encoders")
 FIGURES_DIR = Path("/home/kn/Code/Generalizability-of-experimental-comparisons/Figures")
@@ -42,16 +34,29 @@ palette = "flare_r"
 sns.set_palette("flare_r")
 
 # ---- Parameters
-model = "LR"
-tuning = "no"
-scoring = "ACC"
 eps = 0.2  # max MMD is sqrt2 sqrt(kbar), i.e., sqrt2 in most applications
 alpha = 0.95  # in 95% of cases, we'll get similar experimental results
 lr_confidence = 0.9  # confidence interval for linear prediction
 seed = 1444
 
 # ---- Load data
-df = pd.read_parquet(DATA_DIR / "results.parquet")
+#Dataset
+DATA_SET = Path(DATA_DIR / "results.parquet")
+
+# load Dataset into df
+if DATA_SET.suffix == '.parquet':
+    df = pd.read_parquet(DATA_SET)
+elif DATA_SET.suffix == '.csv':
+    df = pd.read_csv(DATA_SET)
+else:
+    raise Exception("Please use a Parquet or CSV file as the format of your data")
+
+# Querying parameters
+model = "LR"
+tuning = "no"
+scoring = "ACC"
+
+# Build query
 df = df.query("model == @model and tuning == @tuning and scoring == @scoring").reset_index(drop=True)
 rf = ru.get_rankings_from_df(df, factors=["dataset", "model", "tuning", "scoring"], alternatives="encoder",
                              target="cv_score",
@@ -61,12 +66,18 @@ rf = rf.fillna(rf.max())
 # -- Directory
 EXP0_DIR = FIGURES_DIR / "Proof of concept 5" / f"encoders_{model}_{tuning}_{scoring}"
 
+# Decide what kernels to use
+
 kernels = {
-    # "mallows_auto": (ku.mallows_kernel, {"nu": "auto"}),
+    "mallows_auto": (ku.mallows_kernel, {"nu": "auto"}),
     "jaccard_1": (ku.jaccard_kernel, {"k": 1}),
-    # "borda_OHE": (ku.borda_kernel, {"idx": rf.index.get_loc("OHE")}),
-    # "borda_DE": (ku.borda_kernel, {"idx": rf.index.get_loc("DE")})
+    "borda_OHE": (ku.borda_kernel, {"idx": rf.index.get_loc("OHE")}),
+    "borda_DE": (ku.borda_kernel, {"idx": rf.index.get_loc("DE")})
 }
+
+# Decide on the CI for N*
+CI_LOWER = 0.05
+CI_UPPER = 0.95
 
 # ---- Main loop
 for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
@@ -106,21 +117,15 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
             variance = ku.var(rankings, use_rf=True, kernel=kernel, **kernelargs)
             var_lower_bound = gu.sample_mean_embedding_lowerbound(eps, len(datasets), kbar=1,
                                                                   v=variance)
-            # print(f"---- N = {len(datasets)} ----")
-            # print(f"Lower bound on prob(||mu(U) - mu(P)|| < {eps}) = {var_lower_bound:.03f}.")
 
             # -- Compute mmds
-
-            t1 = time()
             mmds = {
-                n: ku.subsample_mmd_distribution(rankings, subsample_size=n, rep=100,
+                n: mmd.subsample_mmd_distribution(rankings, subsample_size=n, rep=100,
                                                  use_rf=True, use_key=False, seed=seed,
                                                  disjoint=disjoint, replace=replace,
                                                  kernel=kernel, **kernelargs)
                 for n in range(2, nv // 2 + 1)
-                # for n in [6, ]
             }
-            # print(f"MMD done in {time() - t1:.1f} seconds.")
 
             # -- Compute generalizability and quantiles
             logepss = np.linspace(np.log(eps) - 0.1,
@@ -129,7 +134,7 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
             ys = {}
             qs = {}
             for n, mmde in mmds.items():
-                ys[n] = [gu.generalizability(mmde, np.exp(logeps)) for logeps in logepss]
+                ys[n] = [mmd.generalizability(mmde, np.exp(logeps)) for logeps in logepss]
                 qs[n] = np.log(np.quantile(mmde, alpha))
 
             dfy = pd.DataFrame(ys)
@@ -173,7 +178,10 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
                 nstar_cv.append(nstar_tmp)
 
             nstar = ns_pred[np.argmax(logepss > np.log(eps))] if lr.coef_ != 0 else np.nan
-            nstar_lower, nstar_upper = np.quantile(nstar_cv, [0.05, 0.95])
+            nstar_lower, nstar_upper = np.quantile(nstar_cv, [CI_LOWER, CI_UPPER])
+
+            print("N*: ", nstar)
+            print(f"N* CI from {CI_LOWER} to {CI_UPPER}: [{nstar_lower}, {nstar_upper}]")
 
             # -- Plot
             fig, axes = plt.subplots(2, 1, sharex="all", figsize=(10, 8))
@@ -232,212 +240,3 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
                 "var_lower_bound": var_lower_bound,
             })
         plt.ion()
-
-        # # -- Get a GIF
-        # images = [iio.imread(image) for image in glob.glob(str(EXP2_DIR / "*.png"))]
-        # iio.mimwrite(EXP2_DIR / f"nstar.gif", images, duration=750,
-        #              loop=0)  # kwargs: https://pillow.readthedocs.io/en/stable/handbook/image-file-formats.html
-        #
-        # # -- Store nstar predictions
-        # out = pd.DataFrame(out)
-        # out.to_parquet(EXP2_DIR / "nstar.parquet")
-
-print("Done!")
-
-# %% 2. Behavior of nstar for different sampling strategies
-"""
-You need to run all strategies before running this section, by changing disjoint and replace.
-
-Strategies:
-    - conservative: disjoint=True, replace=True
-    - optimistic: disjoint=False, replace=False
-    - realistic: disjoint=True, replace=False
-    - ? : disjoint=False, replace=True
-"""
-# model = "LR"
-# EXP0_DIR = FIGURES_DIR / "Proof of concept 2" / f"encoders_{model}_{tuning}_{scoring}"
-for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
-    EXP1_DIR = EXP0_DIR / f"{kernelname}"
-    dfstar = []
-    for disjoint, replace in product([True, False], repeat=2):
-        df_tmp = pd.read_parquet(
-            EXP1_DIR / f"nstar_N_alpha={alpha}_eps={eps}_ci={lr_confidence}_disjoint={disjoint}_replace={replace}" / "nstar.parquet")
-        match disjoint, replace:
-            case (True, True):
-                df_tmp["sampling_strategy"] = "pessimistic"
-            case (False, False):
-                df_tmp["sampling_strategy"] = "optimistic"
-            case (True, False):
-                df_tmp["sampling_strategy"] = "realistic"
-            case (False, True):
-                df_tmp["sampling_strategy"] = "?"
-        dfstar.append(df_tmp)
-    dfstar = pd.concat(dfstar, axis=0)
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sns.lineplot(dfstar, x="N", y="nstar", hue="sampling_strategy", palette="colorblind")
-    for sampling_strategy, color in zip(dfstar["sampling_strategy"].unique(),
-                                        sns.color_palette("colorblind", len(dfstar["sampling_strategy"].unique()))):
-        df_tmp = dfstar.query("sampling_strategy == @sampling_strategy")
-        ax.fill_between(df_tmp["N"], df_tmp["nstar_lower"], df_tmp["nstar_upper"], alpha=0.3, color=color)
-    sns.lineplot(dfstar, x="N", y="N", color="black", ls="--", label="termination")
-
-    ax.set_ylim(0.1, np.quantile(dfstar["nstar"], 0.95))
-    ax.grid()
-    sns.despine(ax=ax)
-
-    fig.suptitle("n* as function of N. The termination criterion is n* <= N\n"
-                 f"model: {model}, scoring: {scoring}, tuning: {tuning}\n"
-                 f"kernel: {kernelname}, alpha:{alpha}, eps: {eps}")
-    plt.tight_layout()
-    plt.savefig(EXP1_DIR / "nstar_N_sampling_strategies.pdf")
-    plt.show()
-
-# %% 3. Visualize MMD
-"""
-We found that results for Jaccard(k=1) are not generalizable, requiring 70 datasets. However, results with Mallows(nu=1)
-    are generalizable, requiring "only" 47 datasets. 
-Remember that the prediction of n* depends is made on at most 25 datasets in both cases.
-
-Now, let's see what the distributions look like, so to visualize the discrepancy. 
-
-For the Jaccard kernel, it should be enough to look at how many times each encoder was among the best ones.
-For the Mallows kernel, we need to consider the entire rankings.
-
-Let's start from MMD.
-
-Realistic sampling: disjoint=True, replace=False
-
-
-TODO: why does Mallows_1 give so much generalizability? something is off. as when I checked MMD it only had two possible 
-    values. Extremely weird. It does make sense! We are predicting (from n=25) that at N=50 we'll get a decent 
-    generalizability. I guess because the spiked MMD converges quite fast. 
-    More, mallows_1 is basically the trivial kernel.
-
-"""
-reload(ku)
-disjoint = True
-replace = False
-
-# kernels = {
-#     "jaccard_1": (ku.jaccard_kernel, {"k": 1}),
-#     "mallows_1": (ku.mallows_kernel, {"nu": 1}),
-#     "mallows_auto": (ku.mallows_kernel, {"nu": "auto"}),
-#     "borda_OHE": (ku.borda_kernel, {"idx": 24}),
-# }
-
-rankings = ru.SampleAM.from_rank_function_dataframe(rf)
-
-mmd_kernels = {kname: {n: ku.subsample_mmd_distribution(rankings, subsample_size=n, rep=100,
-                                                        use_rf=True, use_key=False, seed=seed,
-                                                        disjoint=disjoint, replace=replace,
-                                                        kernel=kernel, **kernelargs)
-                       for n in [25]}
-               for kname, (kernel, kernelargs) in kernels.items()}
-
-dfmmd = pd.DataFrame(mmd_kernels).explode(list(mmd_kernels.keys())).rename_axis(index="n").reset_index().melt(id_vars="n", var_name=["kernel"], value_name="MMD")
-
-fig, ax = plt.subplots()
-
-sns.histplot(data=dfmmd, x="MMD", hue="kernel", stat="probability", kde=True, multiple="layer", cumulative=False,
-             palette="colorblind", ax=ax)
-ax.axvline(eps, ls="--", color="black")
-
-plt.tight_layout()
-plt.show()
-
-# %% 4. Visualize Gram matrices
-reload(ku)
-
-grams = {}
-for kname, k in list(kernels.items()):
-    grams[kname] = ku.gram_matrix(rankings, rankings, use_rf=True, kernel=k[0], **k[1])
-
-dists = {kname: np.sqrt(2) * np.sqrt(gram.max() - gram) for kname, gram in grams.items()}
-
-from sklearn.cluster import OPTICS
-
-fig, axes = plt.subplots(ncols=len(grams), sharex="row", sharey="row")
-for ax, (kname, data) in zip(axes.flatten(), grams.items()):
-
-    # compute clusters for heatmap
-    cluster = OPTICS(min_samples=10, metric="precomputed").fit_predict(dists[kname])
-    key = sorted(range(len(data)), key=lambda i: cluster[i])
-
-    ax.set_title(kname)
-    ax.imshow(data[key, :][:, key], vmin=0, vmax=1)
-
-plt.tight_layout()
-plt.show()
-
-# %% 5. Visualize variance
-
-for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
-    EXP1_DIR = EXP0_DIR / f"{kernelname}"
-    dfstar = []
-    for disjoint, replace in product([True, False], repeat=2):
-        df_tmp = pd.read_parquet(
-            EXP1_DIR / f"nstar_N_alpha={alpha}_eps={eps}_ci={lr_confidence}_disjoint={disjoint}_replace={replace}" / "nstar.parquet")
-        match disjoint, replace:
-            case (True, True):
-                df_tmp["sampling_strategy"] = "pessimistic"
-            case (False, False):
-                df_tmp["sampling_strategy"] = "optimistic"
-            case (True, False):
-                df_tmp["sampling_strategy"] = "realistic"
-            case (False, True):
-                df_tmp["sampling_strategy"] = "?"
-        dfstar.append(df_tmp)
-    dfstar = pd.concat(dfstar, axis=0)
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sns.lineplot(dfstar, x="N", y="variance", palette="colorblind")
-    for sampling_strategy, color in zip(dfstar["sampling_strategy"].unique(),
-                                        sns.color_palette("colorblind", len(dfstar["sampling_strategy"].unique()))):
-        df_tmp = dfstar.query("sampling_strategy == @sampling_strategy")
-
-    ax.grid()
-    sns.despine(ax=ax)
-
-    fig.suptitle("Variance as function of N\n"
-                 f"model: {model}, scoring: {scoring}, tuning: {tuning}\n"
-                 f"kernel: {kernelname}, alpha:{alpha}, eps: {eps}")
-    plt.tight_layout()
-    plt.savefig(EXP1_DIR / "variance_N.pdf")
-    plt.show()
-
-# %% 5. Visualize prob good
-
-for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
-    EXP1_DIR = EXP0_DIR / f"{kernelname}"
-    dfstar = []
-    for disjoint, replace in product([True, False], repeat=2):
-        df_tmp = pd.read_parquet(
-            EXP1_DIR / f"nstar_N_alpha={alpha}_eps={eps}_ci={lr_confidence}_disjoint={disjoint}_replace={replace}" / "nstar.parquet")
-        match disjoint, replace:
-            case (True, True):
-                df_tmp["sampling_strategy"] = "pessimistic"
-            case (False, False):
-                df_tmp["sampling_strategy"] = "optimistic"
-            case (True, False):
-                df_tmp["sampling_strategy"] = "realistic"
-            case (False, True):
-                df_tmp["sampling_strategy"] = "?"
-        dfstar.append(df_tmp)
-    dfstar = pd.concat(dfstar, axis=0)
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sns.lineplot(dfstar, x="N", y="var_lower_bound", palette="colorblind")
-    for sampling_strategy, color in zip(dfstar["sampling_strategy"].unique(),
-                                        sns.color_palette("colorblind", len(dfstar["sampling_strategy"].unique()))):
-        df_tmp = dfstar.query("sampling_strategy == @sampling_strategy")
-
-    ax.grid()
-    sns.despine(ax=ax)
-
-    fig.suptitle("Lower bound on ||mu(U) - mu(P)|| as function of N\n"
-                 f"model: {model}, scoring: {scoring}, tuning: {tuning}\n"
-                 f"kernel: {kernelname}, alpha:{alpha}, eps: {eps}")
-    plt.tight_layout()
-    plt.savefig(EXP1_DIR / "var_lower_bound_N.pdf")
-    plt.show()
