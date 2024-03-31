@@ -95,7 +95,7 @@ replace = False
 
 
 # -- Directory
-EXP0_DIR = FIGURES_DIR / "Proof_of_concept_5" / "encoders_{model}_{tuning}_{scoring}".format(**experimental_conditions)
+EXP0_DIR = FIGURES_DIR / "Proof_of_concept_5" / "encoders_{model}_{tuning}_{scoring}2".format(**experimental_conditions)
 
 # Decide what kernels to use
 
@@ -152,49 +152,40 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
         }
 
         # -- Compute generalizability and quantiles
-        logepss = np.linspace(np.log(EPS) - 0.1,
-                                np.log(max(np.quantile(mmde, ALPHA) for mmde in mmds.values())) + 0.1,
-                                1000)
-        ys = {}
-        qs = {}
-        for n, mmde in mmds.items():
-            ys[n] = [mmd.generalizability(mmde, np.exp(logeps)) for logeps in logepss]
-            qs[n] = np.log(np.quantile(mmde, ALPHA))
+        # Prepare log(eps) scale
+        logepss = np.linspace(np.log(EPS) - 0.1, np.log(max(np.quantile(mmde, ALPHA) for mmde in mmds.values())) + 0.1, 1000)
 
-        dfy = pd.DataFrame(ys)
-        dfy["log(EPS)"] = logepss
-        dfy = dfy.melt(var_name="n", value_name="generalizability", id_vars="log(EPS)")
-        dfy["n"] = dfy["n"].astype(int)
+        # Compute generalizability and quantiles
+        ys = {n: [mmd.generalizability(mmde, np.exp(logeps)) for logeps in logepss] for n, mmde in mmds.items()}
+        qs = {n: np.log(np.quantile(mmde, ALPHA)) for n, mmde in mmds.items()}
 
-        dfq = pd.DataFrame.from_dict(qs, orient="index").reset_index()
-        dfq.columns = ["n", "log(EPS)"]
-        dfq["log(n)"] = np.log(dfq["n"])
+        # Dataframe for generalizability
+        dfy = pd.DataFrame(ys, index=logepss).reset_index().melt(id_vars='index', var_name='n', value_name='generalizability')
+        dfy.rename(columns={'index': 'log(eps)'}, inplace=True)
+        dfy['n'] = dfy['n'].astype(int)
 
-        # -- Fit a linear predictor with cross-validated confidence intervals for log(n) as function of log(EPS)
-        X = dfq["log(EPS)"].to_numpy().reshape(-1, 1)
-        y = dfq["log(n)"].to_numpy().reshape(-1, 1)
+        # Dataframe for quantiles
+        dfq = pd.DataFrame(list(qs.items()), columns=['n', 'log(eps)'])
+        dfq['log(n)'] = np.log(dfq['n'])
 
-        linear_predictors = [LinearRegression().fit(X[tr], y[tr]) for tr, _ in KFold(len(y)).split(X)]
-        
-        # - Get all predictions TODO: Make list comprehension, write comment
-        ns_pred_cv = []
-        for lr_tmp in linear_predictors:
-            ns_tmp = np.exp(lr_tmp.predict(logepss.reshape(-1, 1)).reshape(1, -1)[0])
-            ns_pred_cv.append(ns_tmp)
+        # Linear Regression with Cross-Validation
+        X, y = dfq[['log(eps)']].values, dfq[['log(n)']].values
+        cv = KFold(n_splits=len(y))
 
-        # - Refit a linear model on the entire data
-        lr = LinearRegression()
-        lr.fit(X, y)
-        ns_pred = np.exp(lr.predict(logepss.reshape(-1, 1)).reshape(1, -1)[0])
+        residuals, linear_predictors = [], []
+        for train_index, test_index in cv.split(X):
+            lr = LinearRegression().fit(X[train_index], y[train_index])
+            residuals.extend(y[test_index] - lr.predict(X[test_index]))
+            linear_predictors.append(lr)
 
-        # -- Predict nstar TODO: summarize all 3 loops together into 1 loop
-        nstar_cv = []
-        for lr_tmp, ns_tmp in zip(linear_predictors, ns_pred_cv):
-            nstar_tmp = ns_tmp[np.argmax(logepss > np.log(EPS))] if lr_tmp.coef_ != 0 else np.nan
-            nstar_cv.append(nstar_tmp)
+        # Predictions
+        ns_pred_cv = [np.exp(lr.predict(logepss.reshape(-1, 1)).reshape(-1)) for lr in linear_predictors]
+        ns_pred = np.exp(LinearRegression().fit(X, y).predict(logepss.reshape(-1, 1)).reshape(-1))
 
-        nstar = ns_pred[np.argmax(logepss > np.log(EPS))] if lr.coef_ != 0 else np.nan
-        nstar_lower, nstar_upper = np.quantile(nstar_cv, [CI_LOWER, CI_UPPER])
+        nstar_cv = [pred[np.argmax(logepss > np.log(EPS))] for pred in ns_pred_cv if not np.all(pred == 0)]
+        nstar = ns_pred[np.argmax(logepss > np.log(EPS))]
+
+        nstar_lower, nstar_upper = np.quantile(nstar_cv, [0.05, 0.95])
 
         print("N*: ", nstar)
         print(f"N* CI from {CI_LOWER} to {CI_UPPER}: [{nstar_lower}, {nstar_upper}]")
@@ -204,7 +195,7 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
 
         # - Generalizability
         ax = axes[0]
-        sns.lineplot(dfy, x="log(EPS)", y="generalizability", hue="n", ax=ax, palette=palette)
+        sns.lineplot(dfy, x="log(eps)", y="generalizability", hue="n", ax=ax, palette=palette)
         ax.hlines(ALPHA, ls="--", xmin=np.min(logepss), xmax=np.max(logepss), color="black")
         for n in mmds.keys():
             ax.vlines(qs[n], ymin=0, ymax=ALPHA, ls=":")
@@ -213,7 +204,7 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
         # - Quantiles
         ax = axes[1]
         ymax = max(ns_pred)
-        sns.lineplot(dfq, x="log(EPS)", y="n", ax=ax, ls="", marker="o", hue="n", legend=False)
+        sns.lineplot(dfq, x="log(eps)", y="n", ax=ax, ls="", marker="o", hue="n", legend=False)
         for n in mmds.keys():
             ax.vlines(qs[n], ymin=n, ymax=ymax, ls=":")
         ax.vlines(np.log(EPS), ymin=0.1, ymax=ymax, color="black", ls="--")
