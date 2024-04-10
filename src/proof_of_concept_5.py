@@ -95,7 +95,7 @@ replace = False
 
 
 # -- Directory
-EXP0_DIR = FIGURES_DIR / "Proof_of_concept_5" / "encoders_{model}_{tuning}_{scoring}2".format(**experimental_conditions)
+EXP0_DIR = FIGURES_DIR / "Proof_of_concept_5" / "encoders_{model}_{tuning}_{scoring}".format(**experimental_conditions)
 
 # Decide what kernels to use
 
@@ -117,8 +117,11 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
         ED.mkdir(parents=True, exist_ok=True)
 
     # ---- Computation
+    #### 
+    # TODO: What did we mean by this exactly?
+    ####
     # TODO: Not dataset, but experimental conditions! change names
-    #TODO: initialize the dataset pool with the experimental conditions, initialized earlier
+    # TODO: initialize the dataset pool with the experimental conditions, initialized earlier
     dataset_pool = df["dataset"].unique()  # we remove datasets from it to simulate running new experiments
     datasets = np.array([])  # datasets on which we have already run experiments
     out = []
