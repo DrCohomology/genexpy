@@ -71,6 +71,10 @@ experimental_conditions ={
     "scoring": "ACC"
 }
 
+# As of now, we allow only for one element to be variable
+assert sum(value is None for value in experimental_conditions.values()) == 1, "Exactly one element must be None"
+
+
 target = "cv_score"
 alternatives = "encoder"
 
@@ -117,32 +121,29 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
         ED.mkdir(parents=True, exist_ok=True)
 
     # ---- Computation
-    #### 
-    # TODO: What did we mean by this exactly?
-    ####
-    # TODO: Not dataset, but experimental conditions! change names
-    # TODO: initialize the dataset pool with the experimental conditions, initialized earlier
-    dataset_pool = df["dataset"].unique()  # we remove datasets from it to simulate running new experiments
-    datasets = np.array([])  # datasets on which we have already run experiments
+    ec_variable = next((key for key, value in experimental_conditions.items() if value is None), None)
+    print(ec_variable)
+    ec_pool = df[ec_variable].unique()  # we remove experimental conditions from it to simulate running new experiments
+    ecs = np.array([])  # ecs on which we have already run experiments
     out = []
     plt.ioff()
-    while len(dataset_pool) > 0:
+    while len(ec_pool) > 0:
         # -- Sample a new dataset
         # initialization with the minimum meaningful n, 4 if disjoint is True
-        if len(datasets) == 0:
-            datasets = np.random.default_rng(seed).choice(dataset_pool, 10, replace=False)
+        if len(ecs) == 0:
+            ecs = np.random.default_rng(seed).choice(ec_pool, 10, replace=False)
         else:
-            datasets = np.append(datasets,
-                                    np.random.default_rng(seed).choice(dataset_pool, 10, replace=False))
-        dataset_pool = np.setdiff1d(dataset_pool, datasets)  # remove the sampled datasets rom the pool
+            ecs = np.append(ecs,
+                                    np.random.default_rng(seed).choice(ec_pool, 10, replace=False))
+        ec_pool = np.setdiff1d(ec_pool, ecs)  # remove the sampled ecs rom the pool
 
-        rf_ = rf.loc[:, datasets]
+        rf_ = rf.loc[:, ecs]
         na, nv = rf_.shape
         rankings = ru.SampleAM.from_rank_function_dataframe(rf_)
 
         # -- Compute the lower bound
         variance = ku.var(rankings, use_rf=True, kernel=kernel, **kernelargs)
-        var_lower_bound = gu.sample_mean_embedding_lowerbound(EPS, len(datasets), kbar=1,
+        var_lower_bound = gu.sample_mean_embedding_lowerbound(EPS, len(ecs), kbar=1,
                                                                 v=variance)
 
         # -- Compute mmds
@@ -228,14 +229,14 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
         sns.despine(ax=ax)
 
         # - Finalize
-        fig.suptitle(f"Generalizability for N = {len(datasets):02d}\n"
+        fig.suptitle(f"Generalizability for N = {len(ecs):02d}\n"
                         f"n*(alpha={ALPHA}, eps={EPS}) = {np.ceil(nstar)}\n"
                         f"{LR_CONFIDENCE} confidence interval: [{np.ceil(nstar_lower)}, {np.ceil(nstar_upper)}]")
         plt.tight_layout()
         if FORMAT == "pdf":
-            plt.savefig(EXP2_DIR / f"N={len(datasets):02d}.pdf")
+            plt.savefig(EXP2_DIR / f"N={len(ecs):02d}.pdf")
         else:
-            plt.savefig(EXP2_DIR / f"N={len(datasets):02d}.png")
+            plt.savefig(EXP2_DIR / f"N={len(ecs):02d}.png")
         plt.close("all")
 
         out.append({
@@ -244,7 +245,7 @@ for kernelname, (kernel, kernelargs) in tqdm(list(kernels.items())):
             "eps": EPS,
             "disjoint": disjoint,
             "replace": replace,
-            "N": len(datasets),
+            "N": len(ecs),
             "nstar": nstar,
             "nstar_lower": nstar_lower,
             "nstar_upper": nstar_upper,
