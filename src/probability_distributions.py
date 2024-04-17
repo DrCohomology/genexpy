@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Literal
 
-import src.kernel_utils as ku
+import src.kernels as ku
 import src.rankings_utils as ru
 import src.relation_utils as rlu
 

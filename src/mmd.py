@@ -1,7 +1,7 @@
 import numpy as np
 
-import rankings_utils as ru
-from kernel_utils import square_gram_matrix, gram_matrix, trivial_kernel, Kernel
+import src.rankings_utils as ru
+from src.kernels import square_gram_matrix, gram_matrix, trivial_kernel, Kernel
 
 def mmdb(sample1: ru.SampleAM, sample2: ru.SampleAM, use_rf: bool = True,
          kernel: Kernel = trivial_kernel, **kernelargs) -> float:
