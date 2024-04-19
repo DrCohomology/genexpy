@@ -1,0 +1,26 @@
+paths:
+  data_dir: data/benchmark_encoders
+  figures_dir: Figures
+
+format:
+  output: gif #'gif' for png & gif, 'pdf' for pdf
+
+statistics:
+  epsilon: 0.2
+  alpha: 0.95
+  lr_confidence: 0.9
+  seed: 1444
+
+data:
+  dataset_path: data/benchmark_encoders/results.parquet
+  experimental_conditions:
+    dataset: null
+    model: LR
+    tuning: "no"
+    scoring: ACC
+  target: cv_score
+  alternatives: encoder
+
+experiment:
+  disjoint: true
+  replace: false
