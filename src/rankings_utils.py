@@ -23,11 +23,11 @@ class AdjacencyMatrix(np.ndarray):
         return np.asarray(input_array).view(cls)
 
     @classmethod
-    def from_rank_function(cls, rf: Iterable):
+    def from_rank_function(cls, rv: Iterable):
         """
         a rank function maps an alternative into its rank
         """
-        return np.array([[ri <= rj for rj in rf] for ri in rf]).astype(int).view(cls)
+        return np.array([[ri <= rj for rj in rv] for ri in rv]).astype(int).view(cls)
 
     @classmethod
     def from_bytes(cls, bytestring: bytes, shape: Iterable[int]):
@@ -96,30 +96,30 @@ class SampleAM(UniverseAM):
         return super().__new__(cls, *args, **kwargs)
 
     @classmethod
-    def from_rank_function_dataframe(cls, rf: pd.DataFrame):
+    def from_rank_function_dataframe(cls, rv: pd.DataFrame):
         """
-        Each row of rf is an alternative.
-        Each column of rf is an experimental condition/ voter.
+        Each row of rv is an alternative.
+        Each column of rv is an experimental condition/ voter.
         """
-        out = np.empty_like(rf.columns)
-        for ic, col in enumerate(rf.columns):
-            out[ic] = AdjacencyMatrix.from_rank_function(rf[col]).tohashable()
+        out = np.empty_like(rv.columns)
+        for ic, col in enumerate(rv.columns):
+            out[ic] = AdjacencyMatrix.from_rank_function(rv[col]).tohashable()
         return out.view(cls)
 
     @classmethod
-    def from_rank_function_matrix(cls, rf_matrix):
+    def from_rank_function_matrix(cls, rv_matrix):
         """
         Convert a rank function matrix into a SampleAM object.
-        Each row of rf_matrix is an alternative.
-        Each column of rf_matrix is an experimental condition/ voter.
+        Each row of rv_matrix is an alternative.
+        Each column of rv_matrix is an experimental condition/ voter.
         """
         # Initialize an array to store hashable representations of adjacency matrices
-        out = np.empty(rf_matrix.shape[1], dtype=object)  # Assuming rf_matrix.shape[1] is the number of columns/voters
+        out = np.empty(rv_matrix.shape[1], dtype=object)  # Assuming rv_matrix.shape[1] is the number of columns/voters
 
         # Iterate through each experimental condition/voter
-        for ic in range(rf_matrix.shape[1]):
+        for ic in range(rv_matrix.shape[1]):
             # Extract the rank function for the current column
-            rank_function = rf_matrix[:, ic]
+            rank_function = rv_matrix[:, ic]
 
             # Convert the rank function to an adjacency matrix and then to a hashable object
             out[ic] = AdjacencyMatrix.from_rank_function(rank_function).tohashable()
@@ -130,7 +130,7 @@ class SampleAM(UniverseAM):
         """
         Use the Borda count to rank elements, return the ranks arranged in columns.
         out[i, j] is the rank of alternative (method) i according to voter (experimental condition) j.
-        rf.to_numpy(dtype=int) == self.to_rank_function_matrix()
+        rv.to_numpy(dtype=int) == self.to_rank_function_matrix()
         """
 
         self._get_na_nv()
@@ -144,14 +144,14 @@ class SampleAM(UniverseAM):
 
     def get_rank_function_matrix(self):
         """
-        Set the rf attribute of self, containing the rank function representation.
+        Set the rv attribute of self, containing the rank function representation.
         """
         try:
-            self.rf
+            self.rv
         except AttributeError:
-            self.rf = self.to_rank_function_matrix()
+            self.rv = self.to_rank_function_matrix()
         finally:
-            return self.rf
+            return self.rv
 
     def set_key(self, key: Collection):
         """
@@ -164,7 +164,7 @@ class SampleAM(UniverseAM):
         return self
 
     def get_subsamples_pair(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False,
-                            disjoint: bool = True, use_rf: bool = False):
+                            disjoint: bool = True, use_rv: bool = False):
         """
 
         :param seed: passed to the rng
@@ -175,8 +175,8 @@ class SampleAM(UniverseAM):
         :type replace:
         :param disjoint: if True, the returned subsamples have disjoint keys (if use_key) or indices. Allow repetitions between subsamples.
         :type disjoint:
-        :param use_rf: if True, return a rank function matrix
-        :type use_rf:
+        :param use_rv: if True, return a rank function matrix
+        :type use_rv:
         :return:
         :rtype:
         """
@@ -204,7 +204,7 @@ class SampleAM(UniverseAM):
         mask1 = np.isin(keys, keys1)
         mask2 = np.isin(keys, keys2)
 
-        if use_rf:
+        if use_rv:
             out = self.get_rank_function_matrix()
             return out[:, mask1], out[:, mask2]
         else:
@@ -232,7 +232,7 @@ def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyS
         iterator = tqdm(list(iterator))
     for group, indices in iterator:
         score = df.iloc[indices].set_index(alternatives)[target]
-        rankings[group] = rlu.score2rf(score, lower_is_better=lower_is_better, impute_missing=impute_missing)
+        rankings[group] = rlu.score2rv(score, lower_is_better=lower_is_better, impute_missing=impute_missing)
 
     return pd.DataFrame.from_dict(rankings, orient="index").T  # for whatever reason, this seems to be more stable
 
@@ -242,7 +242,7 @@ def universe_untied_rankings(na: int) -> UniverseAM[AdjacencyMatrix]:
     :param na: number of alternatives, i.e., items ranked
     """
     # all possible untied rank functions
-    return UniverseAM(AdjacencyMatrix.from_rank_function(rf) for rf in permutations(range(na)))
+    return UniverseAM(AdjacencyMatrix.from_rank_function(rv) for rv in permutations(range(na)))
 
 
 # Function for generating Rankings without ties

@@ -9,8 +9,8 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-# Put score2rf and vec2rf into same function, cast pdSeries to array
-def score2rf(score: pd.Series, lower_is_better: bool = True, impute_missing: bool = True) -> pd.Series:
+# Put score2rv and vec2rv into same function, cast pdSeries to array
+def score2rv(score: pd.Series, lower_is_better: bool = True, impute_missing: bool = True) -> pd.Series:
     """
     Rank the elements of 'score.index' according to 'score'.
     lower_is_better =
@@ -23,7 +23,7 @@ def score2rf(score: pd.Series, lower_is_better: bool = True, impute_missing: boo
     return score.map({s: sorted(score.unique(), key=lambda x: c * x).index(s) for s in score.unique()})
 
 
-def vec2rf(arr: np.ndarray[int | float], lower_is_better: bool = True) -> np.ndarray[int | float]:
+def vec2rv(arr: np.ndarray[int | float], lower_is_better: bool = True) -> np.ndarray[int | float]:
     """
     Rank the elements of 'arr' according to their value.
     lower_is_better =

@@ -201,11 +201,11 @@ class BallProbabilityDistribution(ProbabilityDistribution):
         # if you know what center you want, use that one
         if center is not None:
             assert len(center) == self.na
-            # convert to valid rf
-            center = rlu.vec2rf(center)
+            # convert to valid rv
+            center = rlu.vec2rv(center)
         # otherwise, use a random one
         else:
-            center = rlu.vec2rf(rng.integers(low=0, high=self.na, size=self.na))
+            center = rlu.vec2rv(rng.integers(low=0, high=self.na, size=self.na))
 
         if kind == "ball":
             c = np.greater_equal
@@ -222,8 +222,8 @@ class BallProbabilityDistribution(ProbabilityDistribution):
             if max_steps is not None:
                 ctr += 1
             random_vector = rng.integers(low=0, high=self.na, size=self.na)
-            valid_rf = rlu.vec2rf(random_vector)
-            condition = c(kernel(center, valid_rf, **kernelargs), radius)
+            valid_rv = rlu.vec2rv(random_vector)
+            condition = c(kernel(center, valid_rv, **kernelargs), radius)
 
             if condition:
                 samples.append(random_vector)
@@ -231,6 +231,6 @@ class BallProbabilityDistribution(ProbabilityDistribution):
         samples = np.column_stack(samples) if samples else np.empty((self.na, 0))
         
         out = ru.SampleAM.from_rank_function_matrix(samples)
-        out.rf = samples
+        out.rv = samples
 
         return out
