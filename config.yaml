@@ -5,7 +5,7 @@ paths:
 format:
   output: gif #'gif' for png & gif, 'pdf' for pdf
 
-statistics:
+parameters:
   epsilon: 0.2
   alpha: 0.95
   lr_confidence: 0.9
@@ -21,6 +21,6 @@ data:
   target: cv_score
   alternatives: encoder
 
-experiment:
+sampling:
   disjoint: true
   replace: false
