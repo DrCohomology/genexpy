@@ -12,7 +12,7 @@ parameters:
   seed: 1444
 
 data:
-  dataset_path: data/benchmark_encoders/results.parquet
+  dataset_path: results.parquet
   experimental_conditions:
     dataset: null
     model: LR
