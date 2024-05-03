@@ -13,14 +13,15 @@ parameters:
 
 data:
   dataset_path: results.parquet
-  experimental_conditions:
+  experimental_factors:
     dataset: null
-    model: LR
+    model: "LR"
     tuning: "no"
-    scoring: ACC
-  target: cv_score
-  alternatives: encoder
+    scoring: "ACC"
+  target: "cv_score"
+  alternatives: "encoder"
 
 sampling:
+  sample_size: 10
   disjoint: true
   replace: false
