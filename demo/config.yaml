@@ -1,9 +1,8 @@
 paths:
-  data_dir: data/benchmark_encoders
   figures_dir: Figures
 
 format:
-  output: gif #'gif' for png & gif, 'pdf' for pdf
+  output: all #'pdf', 'png', 'gif' (png & gif), 'all' (gif, png & pdf)
 
 parameters:
   epsilon: 0.2
@@ -12,7 +11,7 @@ parameters:
   seed: 1444
 
 data:
-  dataset_path: results.parquet
+  dataset_path: Data/results.parquet
   experimental_factors:
     dataset: null
     model: "LR"
@@ -25,3 +24,13 @@ sampling:
   sample_size: 10
   disjoint: true
   replace: false
+
+kernels:
+  mallows_auto:
+    nu: "auto"
+  jaccard_1:
+    k: 1
+  borda_OHE:
+    idx: "OHE"
+  borda_DE:
+    idx: "DE"
