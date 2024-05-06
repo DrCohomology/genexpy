@@ -10,7 +10,7 @@ pip install Generalizability-of-Experimental-Comparisons
 git clone https://github.com/DrCohomology/Generalizability-of-experimental-comparisons.git
 cd Generalizability-of-experimental-comparisons
 ```
-2. **Install the package**
+2. **Install the package** (Work in progress)
 ```bash
 pip install .
 ```
