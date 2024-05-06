@@ -1,11 +1,5 @@
-- README ✅
-    - how to install repo ✅
-    - use a package ✅
-- separate config file ✅
 - docstring for the public methods
-- Make proof_of_concept as main for Jupyter Notebook ✅
-- remove Loop ✅
-- explain what a RF is, in the kernels.py, a comment
-- a better description of what it is in the notebook
-- rank_function to rank_vector ✅
-- rename files ✅
+- explain what a RV is
+    - a comment in the kernels.py
+- kernel examples and explanations in the notebook
+- put kernel parameters into config
