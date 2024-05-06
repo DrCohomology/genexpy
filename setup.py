@@ -7,7 +7,7 @@ def read_requirements():
     return requirements
 
 setup(
-    name='generalizability',
+    name='genexpy',
     version='0.1.0',
     packages=find_packages(),
     description='A package to quantify the generalizability of experimental results',

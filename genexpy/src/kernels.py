@@ -38,20 +38,23 @@ def _mallows_bytes(b1: RankByte, b2: RankByte, nu: Union[float, Literal["auto"]]
 
 def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[float, Literal["auto"]] = "auto") -> float:
     """
-    Mallows kernel adapted for ties.
-    :param x1: first ranking
-    :type x1: Ranking
-    :param x2: second ranking
-    :type x2: Ranking
-    :param nu: kernel bandwidth. If 'auto', it's the number of
-    :type nu: float or 'auto'
-    :param use_rv: if True, use rank function
-    :type use_rv: bool
-    :return: the Mallows kernel adapted for ties
-    :rtype: float
+    Computes the Mallows kernel between two rankings, which is based on the difference in their rankings adjusted by a 
+    decay parameter nu.
+    
+    Parameters:
+    - x1 (Ranking): The first ranking as a RankVector or RankByte.
+    - x2 (Ranking): The second ranking as a RankVector or RankByte.
+    - nu (float, 'auto'): The decay parameter for the kernel. If 'auto', it adjusts based on the length of the rankings.
+    - use_rv (bool): Determines whether to use the rank vector or byte representation for the calculation.
+    
+    Returns:
+    - float: The computed Mallows kernel value.
+    
+    Raises:
+    - ValueError: If the rankings do not have the same number of alternatives.
     """
     if len(x1) != len(x2):
-        raise ValueError("The rankings have different number of alternatives.")
+        raise ValueError("The rankings have different numbers of alternatives.")
     if nu == "auto":
         if use_rv:
             # nu = 2 / (len(x1) * (len(x1) - 1))
@@ -96,17 +99,20 @@ def _jaccard_bytes(b1: RankByte, b2: RankByte, k: int = 1):
 
 def jaccard_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, k: int = 1) -> float:
     """
-    Jaccard similarity (intersection over union) of the top k tiers of x1 and x2.
-    :param x1: first ranking
-    :type x1: Ranking
-    :param x2: second ranking
-    :type x2: Ranking
-    :param k: top tiers considered
-    :type k: int
-    :param use_rv: if True, use rank function
-    :type use_rv: bool
-    :return: the Jaccard kernel adapted for ties
-    :rtype: float
+    Computes the Jaccard kernel between two rankings by considering the top k tiers of the rankings. This kernel 
+    measures the similarity based on the intersection over union of the rankings within the top k tiers.
+    
+    Parameters:
+    - x1 (Ranking): The first ranking as a RankVector or RankByte.
+    - x2 (Ranking): The second ranking as a RankVector or RankByte.
+    - k (int): The number of top tiers to consider for the similarity calculation.
+    - use_rv (bool): Determines whether to use the rank vector or byte representation for the calculation.
+    
+    Returns:
+    - float: The computed Jaccard similarity score.
+    
+    Raises:
+    - ValueError: If the rankings do not have the same number of alternatives.
     """
     if len(x1) != len(x2):
         raise ValueError("The rankings have different number of alternatives.")
@@ -131,19 +137,21 @@ def _borda_bytes(b1: RankByte, b2: RankByte, idx: int = 0, nu: Union[float, Lite
 def borda_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, idx: int = 0,
                  nu: Union[float, Literal["auto"]] = "auto") -> float:
     """
-    Rescaled difference of the Borda counts for the alternative at position idx.
-    :param nu: kernel bandwidth. auto is the number of alternatives
-    :type nu:
-    :param x1: first ranking
-    :type x1: Ranking
-    :param x2: second ranking
-    :type x2: Ranking
-    :param idx: Index of the alternative under consideration
-    :type idx: int
-    :param use_rv: if True, use rank function
-    :type use_rv: bool
-    :return: the Jaccard kernel adapted for ties
-    :rtype: float
+    Computes a kernel based on the Borda count for a specific alternative indexed by 'idx'. This kernel considers the 
+    rescaled difference of the Borda counts at a particular position and is adjusted by a kernel bandwidth 'nu'.
+    
+    Parameters:
+    - x1 (Ranking): The first ranking, either as a RankVector or RankByte.
+    - x2 (Ranking): The second ranking, either as a RankVector or RankByte.
+    - idx (int): Index of the alternative under consideration within the ranking.
+    - nu (float, 'auto'): The kernel bandwidth, adjusted automatically to the inverse of the number of alternatives squared if 'auto'.
+    - use_rv (bool): If True, uses rank vector representation; otherwise expects a byte representation.
+    
+    Returns:
+    - float: The computed kernel value.
+    
+    Raises:
+    - ValueError: If the rankings do not have the same number of alternatives.
     """
     if len(x1) != len(x2):
         raise ValueError("The rankings have different number of alternatives.")
@@ -176,8 +184,18 @@ def degenerate_kernel(x: Ranking, y: Ranking, use_rv: bool = True, **kwargs) -> 
 def gram_matrix(sample1: ru.SampleAM, sample2: ru.SampleAM, use_rv: bool = True,
                 kernel: Kernel = trivial_kernel, **kernelargs) -> np.ndarray[float]:
     """
-    Gram matrix of the two samples.
-    out[i, j] = kernel(sample1[i], sample2[j]).
+    Computes the Gram matrix between two samples of rankings, where each entry in the matrix represents the kernel 
+    similarity between the rankings from each sample.
+    
+    Parameters:
+    - sample1 (SampleAM): The first sample of rankings.
+    - sample2 (SampleAM): The second sample of rankings.
+    - use_rv (bool): If True, converts the rankings to rank function matrix format before processing.
+    - kernel (Kernel): The kernel function to use for computing similarities.
+    - **kernelargs: Additional keyword arguments for the kernel function.
+    
+    Returns:
+    - np.ndarray[float]: A matrix of kernel similarities.
     """
 
     if use_rv:
@@ -194,8 +212,24 @@ def gram_matrix(sample1: ru.SampleAM, sample2: ru.SampleAM, use_rv: bool = True,
 def square_gram_matrix(sample: ru.SampleAM, use_rv: bool = True,
                        kernel: Kernel = trivial_kernel, **kernelargs) -> np.ndarray[float]:
     """
-    Gram matrix of the two samples.
-    out[i, j] = kernel(sample1[i], sample2[j]).
+    Computes a symmetric square Gram matrix for a given sample of rankings. The matrix is calculated using a specified 
+    kernel function, and each element [i, j] represents the kernel similarity between the i-th and j-th elements of the 
+    sample.
+
+    Parameters:
+    - sample (SampleAM): The sample of rankings for which the Gram matrix is to be computed. This can be a collection 
+      of rank vectors or adjacency matrices.
+    - use_rv (bool): If True, converts the rankings to a rank function matrix before computation, which changes the 
+      data structure to rows representing voters and columns representing alternatives.
+    - kernel (Kernel): The kernel function used to compute the similarity between two rankings.
+    - **kernelargs: Arbitrary keyword arguments for the kernel function to handle specific kernel configurations.
+    
+    Returns:
+    - np.ndarray[float]: A symmetric square Gram matrix of kernel similarities.
+
+    Notes:
+    - The function first computes the lower triangle of the matrix, fills the diagonal with self-similarity values, 
+      and then mirrors the lower triangle to the upper to complete the symmetric matrix.
     """
 
     if use_rv:
@@ -217,7 +251,17 @@ def square_gram_matrix(sample: ru.SampleAM, use_rv: bool = True,
 
 def var(sample: ru.SampleAM, use_rv: bool = True, kernel: Kernel = trivial_kernel, **kernelargs) -> float:
     """
-    Sample variance of a distribution of adjacency matrices computed in a RKHS.
+    Computes the sample variance of a distribution of rankings within a Reproducing Kernel Hilbert Space (RKHS). The 
+    variance is derived from the Gram matrix of the sample, which is computed using a specified kernel function.
+
+    Parameters:
+    - sample (SampleAM): The sample of rankings from which to compute the variance.
+    - use_rv (bool): If True, the rankings are converted using a rank function matrix representation before computation.
+    - kernel (Kernel): The kernel function used for computing the Gram matrix.
+    - **kernelargs: Additional keyword arguments for the kernel function.
+    
+    Returns:
+    - float: The computed variance of the rankings within the RKHS.
     """
     nv = len(sample)
     kxx = square_gram_matrix(sample=sample, use_rv=use_rv, kernel=kernel, **kernelargs)
