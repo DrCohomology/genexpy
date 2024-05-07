@@ -27,10 +27,21 @@ sampling:
 
 kernels:
   mallows_auto:
-    nu: "auto"
+    kernel: "mallows_kernel"
+    params:
+      nu: "auto"
+
   jaccard_1:
-    k: 1
+    kernel: "jaccard_kernel"
+    params:
+      k: 1
+  
   borda_OHE:
-    idx: "OHE"
+    kernel: "borda_kernel"
+    params:
+      idx: "OHE"
+
   borda_DE:
-    idx: "DE"
+    kernel: "borda_kernel"
+    params:
+      idx: "DE"
