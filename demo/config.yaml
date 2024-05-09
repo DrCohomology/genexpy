@@ -26,22 +26,15 @@ sampling:
   replace: false
 
 kernels:
-  mallows_auto:
-    kernel: "mallows_kernel"
+# note that the kernel must be the name of the callable defined in kernels.py
+  - kernel: "mallows_kernel"
     params:
-      nu: "auto"
+      nu: ["auto", 1]
 
-  jaccard_1:
-    kernel: "jaccard_kernel"
+  - kernel: "jaccard_kernel"
     params:
-      k: 1
-  
-  borda_OHE:
-    kernel: "borda_kernel"
-    params:
-      idx: "OHE"
+      k: [1, 2]
 
-  borda_DE:
-    kernel: "borda_kernel"
+  - kernel: "borda_kernel"
     params:
-      idx: "DE"
+      idx: ["OHE", "DE"]

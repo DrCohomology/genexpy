@@ -54,13 +54,14 @@ def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[floa
     - ValueError: If the rankings do not have the same number of alternatives.
     """
     if len(x1) != len(x2):
-        raise ValueError("The rankings have different numbers of alternatives.")
+        raise ValueError("The rankings must have the same number of alternatives.")
+    
+    if isinstance(nu, float) and nu <= 0:
+        raise ValueError("nu must be a positive number when specified.")
     if nu == "auto":
         if use_rv:
-            # nu = 2 / (len(x1) * (len(x1) - 1))
             nu = 1 / len(x1)**2
         else:
-            # nu = 2 / (np.sqrt(len(x1)) * (np.sqrt(len(x1)) - 1))
             nu = 1 / len(x1)
     if use_rv:
         return _mallows_rv(x1, x2, nu=nu)
@@ -115,7 +116,11 @@ def jaccard_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, k: int = 1) ->
     - ValueError: If the rankings do not have the same number of alternatives.
     """
     if len(x1) != len(x2):
-        raise ValueError("The rankings have different number of alternatives.")
+        raise ValueError("The rankings must have the same number of alternatives.")
+    if not isinstance(k, int) or k <= 0:
+        raise ValueError("k must be a positive integer.")
+    if k > len(x1):
+        raise ValueError("k cannot exceed the number of alternatives in the rankings.") #TODO: Is this legit?
     if use_rv:
         return _jaccard_rv(x1, x2, k=k)
     else:
@@ -154,7 +159,13 @@ def borda_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, idx: int = 0,
     - ValueError: If the rankings do not have the same number of alternatives.
     """
     if len(x1) != len(x2):
-        raise ValueError("The rankings have different number of alternatives.")
+        raise ValueError("The rankings must have the same number of alternatives.")
+    if not isinstance(idx, int) or idx < 0 or idx >= len(x1):
+        raise ValueError("idx must be a non-negative integer within the bounds of the rankings.")
+    if isinstance(nu, str) and nu != "auto":
+        raise ValueError("When a string, nu must be 'auto'.")
+    if isinstance(nu, float) and nu <= 0:
+        raise ValueError("nu must be a positive number when specified as a float.")
     if nu == "auto":
         if use_rv:
             nu = 1 / len(x1)
