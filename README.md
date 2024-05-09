@@ -2,15 +2,15 @@
 
 ### Installation via pip
 ```bash
-pip install Generalizability-of-Experimental-Comparisons
+pip install genexpy
 ```
 ### Installation via cloning from git
 1. **Clone the Repository**
 ```bash
-git clone https://github.com/DrCohomology/Generalizability-of-experimental-comparisons.git
+git clone https://github.com/DrCohomology/genexpy.git
 cd Generalizability-of-experimental-comparisons
 ```
-2. **Install the package** (Work in progress)
+2. **Install the package**
 ```bash
 pip install .
 ```
