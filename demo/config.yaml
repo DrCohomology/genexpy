@@ -15,7 +15,7 @@ data:
   experimental_factors:
     dataset: null
     model: "LR"
-    tuning: "no"
+    tuning: "_all"
     scoring: "ACC"
   target: "cv_score"
   alternatives: "encoder"
@@ -29,7 +29,7 @@ kernels:
 # note that the kernel must be the name of the callable defined in kernels.py
   - kernel: "mallows_kernel"
     params:
-      nu: ["auto", 1]
+      nu: "auto"
 
   - kernel: "jaccard_kernel"
     params:
@@ -37,4 +37,4 @@ kernels:
 
   - kernel: "borda_kernel"
     params:
-      idx: ["OHE", "DE"]
+      idx: "OHE"
