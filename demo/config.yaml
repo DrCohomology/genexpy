@@ -15,7 +15,7 @@ data:
   experimental_factors:
     dataset: null
     model: "LR"
-    tuning: "_all"
+    tuning: "no"
     scoring: "ACC"
   target: "cv_score"
   alternatives: "encoder"

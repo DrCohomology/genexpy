@@ -1,0 +1,40 @@
+paths:
+  figures_dir: figures
+
+format:
+  output: all #'pdf', 'png', 'gif' (png & gif), 'all' (gif, png & pdf)
+
+parameters:
+  epsilon: 0.2
+  alpha: 0.95
+  lr_confidence: 0.9
+  seed: 1444
+
+data:
+  dataset_path: data/encoders/results.parquet
+  experimental_factors:
+    dataset: null
+    model: "LR"
+    tuning: "_all"
+    scoring: "ACC"
+  target: "cv_score"
+  alternatives: "encoder"
+
+sampling:
+  sample_size: 10
+  disjoint: true
+  replace: false
+
+kernels:
+# note that the kernel must be the name of the callable defined in kernels.py
+  - kernel: "mallows_kernel"
+    params:
+      nu: "auto"
+
+  - kernel: "jaccard_kernel"
+    params:
+      k: [1, 2]
+
+  - kernel: "borda_kernel"
+    params:
+      idx: "OHE"
