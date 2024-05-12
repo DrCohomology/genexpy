@@ -1,0 +1,5 @@
+- docstring for the public methods
+- explain what a RV is
+    - a comment in the kernels.py
+- kernel examples and explanations in the notebook
+- create a new demo where we can have in the config for LR "_all" which loops over all possible columns for the "__all", beyond the query. "global_demo" or something
