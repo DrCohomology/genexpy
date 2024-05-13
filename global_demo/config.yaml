@@ -16,7 +16,7 @@ data:
     dataset: null
     model: "LR"
     tuning: "_all"
-    scoring: "ACC"
+    scoring: "_all"
   target: "cv_score"
   alternatives: "encoder"
 
@@ -33,7 +33,7 @@ kernels:
 
   - kernel: "jaccard_kernel"
     params:
-      k: [1, 2]
+      k: 1
 
   - kernel: "borda_kernel"
     params:
