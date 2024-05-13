@@ -17,5 +17,5 @@ setup(
     author_email='federico.matteucci@kit.edu, uypgi@student.kit.edu',
     url='https://github.com/DrCohomology/Generalizability-of-experimental-comparisons',
     install_requires=read_requirements(),
-    python_requires='>=3.12.3',
+    python_requires='==3.11.9',
 )
