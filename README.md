@@ -1,6 +1,13 @@
 # Generalizability of experimental studies
 
-[image]
+<figure>
+  <img alt="" src="demos/Categorical encoders/figures/encoders_nstar_alpha_delta.png" title="Nstar">
+  <figcaption><em>
+        Estimated number of experimental conditions necessary to achieve $(\alpha^*, \delta^*)$-generalizable results, 
+        for different goals $g_1, g_2, g_3$. $\alpha^*$ is the desired generalizability and $\delta^*$ is the similarity 
+        threshold to consider two rankings similar.
+  </em></figcaption>
+</figure>
 
 This repository is the official implementation of [Generalizability of Experimental Studies]().
 
