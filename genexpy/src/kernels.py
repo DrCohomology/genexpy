@@ -138,8 +138,8 @@ def _borda_rv(r1: RankVector, r2: RankVector, idx: int = 0, nu: Union[float, Lit
 def _borda_bytes(b1: RankByte, b2: RankByte, idx: int = 0, nu: Union[float, Literal["auto"]] = "auto") -> float:
     raise NotImplementedError
 
-
-def borda_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, idx: int = 0,
+# TODO: let hte function accept the name of an alternative instead of just indices
+def borda_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, idx: int = 0, alternative=None,
                  nu: Union[float, Literal["auto"]] = "auto") -> float:
     """
     Computes a kernel based on the Borda count for a specific alternative indexed by 'idx'. This kernel considers the 

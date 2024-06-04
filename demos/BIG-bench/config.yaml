@@ -21,7 +21,7 @@ format:
 # The other defining parameter for a generalizability analysis, delta, is defined for every kernel differently,
 # as it has different interpretations (see below).
 parameters:
-  alpha: 0.7
+  alpha: 0.
   lr_confidence: 0.9
   seed: 37
 
@@ -39,7 +39,7 @@ parameters:
   # target: the name of the column, the alternatives are ranked according to it.
   # alternatives the name of the column listed the compared methods
 data:
-  dataset_path: data/benchmark_llms.parquet
+  dataset_path: data/bigbench_results.parquet
   experimental_factors:
     subtask_description: null
     task_name: "_all"
@@ -79,5 +79,5 @@ kernels:
 
   - kernel: "borda_kernel"
     params:
-      idx: "GPT "                 # alternative of interest
+      alternative: "GPT GPT-3 Small"                 # alternative of interest
     delta: 0.05                   # max difference in relative position of 'idx' for two rankings to be similar

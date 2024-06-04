@@ -3,17 +3,6 @@ paths:
   output_dir: outputs
   figures_dir: figures
 
-# Output format for the intermediate plots, stored in subdirectories of `outputs` (not featured in the paper).
-# Any non-null value significantly slows down the computation.
-# Accepted values:
-  # null (no figures)
-  # pdf
-  # png
-  # gif (png & gif)
-  # all (pdf, png & gif)
-format:
-  figure_output: null
-
 # Parameters for the generalizability study:
   # alpha specifies the desired level of generalizability;
   # lr_confidence is the width of a confidence interval for the linear regression;
@@ -21,7 +10,7 @@ format:
 # The other defining parameter for a generalizability analysis, delta, is defined for every kernel differently,
 # as it has different interpretations (see below).
 parameters:
-  alpha: 0.7
+  alpha: 0.95
   lr_confidence: 0.9
   seed: 37
 
@@ -69,17 +58,17 @@ sampling:
   # params: the parameters of a kernel as defined in kernels.py. Either a value or a list of values
   # delta: float in [0, 1], defines the similarity threshold between rankings
 kernels:
-  - kernel: "mallows_kernel"
+  - kernel: "borda_kernel"
     params:
-      nu: "auto"                  # kernel bandwidth, auto = 1 /  binom(na, 2)
-    delta: 0.05                   # max fraction of discordant pairs for two rankings to be similar
+      alternative: "OHE"          # alternative of interest
+    delta: 0.05                   # max difference in relative position of 'idx' for two rankings to be similar
 
   - kernel: "jaccard_kernel"
     params:
       k: 1                        # number of top tiers considered
     delta: 0.05                   # minimum intersection over union between top-k tiers for two rankings to be similar
 
-  - kernel: "borda_kernel"
+  - kernel: "mallows_kernel"
     params:
-      idx: "GPT "                 # alternative of interest
-    delta: 0.05                   # max difference in relative position of 'idx' for two rankings to be similar
+      nu: "auto"                  # kernel bandwidth, auto = 1 /  binom(na, 2)
+    delta: 0.05                   # max fraction of discordant pairs for two rankings to be similar
