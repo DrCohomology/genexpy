@@ -1,7 +1,7 @@
 # Generalizability of experimental studies
 
 <figure>
-  <img alt="" src="demos/Categorical encoders/figures/encoders_nstar_alpha_delta.png" title="Nstar">
+  <img alt="" src="demos/Categorical encoders/figures/encoders_nstar_alpha_delta.png" title="Nstar" align="center">
   <figcaption><em>
         Estimated number of datasets necessary to achieve generalizable results for the categorical encoders study, 
         conditioned on desired generalizability level (left) and similarity threshold between rankings (right). 
