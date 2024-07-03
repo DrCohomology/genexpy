@@ -19,11 +19,11 @@ Ranking: TypeAlias = Union[RankVector, RankByte]
 
 
 @njit
-def _mallows_rv(r1: RankVector, r2: RankVector, nu: float = "auto") -> float:
+def _mallows_rv(r1: RankVector, r2: RankVector, nu: Union[float, Literal["auto"]] = "auto") -> float:
     n = len(r1)
     out = 0
     for i in range(n):
-        for j in range(n):
+        for j in range(i):
             out += np.abs(np.sign(r1[i] - r1[j]) - np.sign(r2[i] - r2[j]))
     return np.exp(- nu * out)
 
@@ -39,7 +39,7 @@ def _mallows_bytes(b1: RankByte, b2: RankByte, nu: Union[float, Literal["auto"]]
 def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[float, Literal["auto"]] = "auto") -> float:
     """
     Computes the Mallows kernel between two rankings, which is based on the difference in their rankings adjusted by a 
-    decay parameter nu.
+    kernel bandwidth parameter nu.
     
     Parameters:
     - x1 (Ranking): The first ranking as a RankVector or RankByte.
@@ -58,11 +58,10 @@ def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[floa
     
     if isinstance(nu, float) and nu <= 0:
         raise ValueError("nu must be a positive number when specified.")
+
     if nu == "auto":
-        if use_rv:
-            nu = 1 / len(x1)**2
-        else:
-            nu = 1 / len(x1)
+        n = len(x1) if use_rv else np.sqrt(len(x1))
+        nu = 2 / (n*(n-1))
     if use_rv:
         return _mallows_rv(x1, x2, nu=nu)
     else:
@@ -245,6 +244,7 @@ def square_gram_matrix(sample: ru.SampleAM, use_rv: bool = True,
 
     if use_rv:
         sample = sample.to_rank_function_matrix().T  # rows: voters, cols: alternatives
+    # print(sample)
 
     lt = np.zeros((len(sample), len(sample)))
     for (i1, x1) in enumerate(sample):

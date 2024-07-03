@@ -1,12 +1,39 @@
 import numpy as np
+import time
 
 from abc import ABC, abstractmethod
-from collections import defaultdict
+from collections import Counter, defaultdict
+from scipy.special import factorial, stirling2
+from tqdm import tqdm
 from typing import Literal
 
-from . import kernels as ku
-from . import rankings_utils as ru
-from . import relation_utils as rlu
+from genexpy import kernels as ku
+from genexpy import rankings_utils as ru
+from genexpy import relation_utils as rlu
+
+
+def sample_from_sphere(na: int, n: int, rng: np.random.Generator) -> np.ndarray[float]:
+    """
+    sample points uniformly from the unitary na-sphere.
+    Credits to https://mathoverflow.net/questions/24688/efficiently-sampling-points-uniformly-from-the-surface-of-an-n-sphere.
+    na: sphere dimensionality
+    n: sample size
+    rng: random number generator
+    returns a "list" of points uniformly from the unitary na-sphere.
+    """
+    x = rng.normal(0, 1, (na, n))
+    return x / np.linalg.norm(x, axis=1).reshape(-1, 1)
+
+
+def get_unique_ranks_distribution(n, exact=False):
+    """
+    A ranking with ties has a different number of unique ranks. For instance, 0112 has 3 unique ranks.
+    Given a ranking of 'n' alternatives, get the number of rankings with k unique ranks for all 1 <= k <= n.
+        closely related to T(n, k) in https://oeis.org/A019538
+    return the normalized value.
+    """
+    out = factorial(np.arange(n)+1, exact=exact) * stirling2(n, np.arange(n)+1, exact=exact)
+    return out / out.sum()
 
 
 class FunctionDefaultDict(defaultdict):
@@ -19,141 +46,171 @@ class FunctionDefaultDict(defaultdict):
 
 
 class ProbabilityDistribution(ABC):
-    def __init__(self, universe: ru.UniverseAM = None, na: int = None):
+    def __init__(self, universe: ru.SampleAM = None, na: int = None, seed: int = None):
+        self.universe = universe
         if universe is None:
             if na is None:
                 raise ValueError("Specify the number of alternatives or a universe")
             self.na = na
         else:
             self.na = universe.get_na()
-        self.universe = universe
-        if self.universe is not None and len(self.universe) == 0:
-            raise ValueError("The input list is empty.")
-        self.distr = defaultdict(lambda: 0)
+            if len(self.universe) == 0:
+                raise ValueError("The input list is empty.")
+
+        self.pmf = defaultdict(lambda: 0)
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
+        self.sample_time = np.nan
+
+
+    def _check_valid_element(self, x):
+        if x is not None:
+            if self.universe is not None and x not in self.universe:
+                raise ValueError("The input element must belong to the universe.")
+            else:
+                if len(x) != self.na ** 2:  # bytestring representation:
+                    raise ValueError("The input element must have the correct number of alternatives.")
+
+
+    def _sample_from_universe(self, n: int, **kwargs):
+        return self.universe.get_subsample(subsample_size=n, seed=self.seed, use_key=False, replace=True)
 
     @abstractmethod
-    def sample(self, n: int, seed: int = 42) -> np.array:
+    def _sample_from_na(self, n: int, **kwargs):
         pass
 
+    def sample(self, n: int, **kwargs) -> ru.SampleAM:
+        start_time = time.time()
+        if self.universe is not None:
+            out = self._sample_from_universe(n, **kwargs)
+        else:
+            out = self._sample_from_na(n, **kwargs)
+        self.sample_time = time.time() - start_time
+        return out
 
 class UniformDistribution(ProbabilityDistribution):
-    def __init__(self, universe: ru.UniverseAM):
-        super().__init__(universe)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.pmf = FunctionDefaultDict(lambda x: 1 / self.na)
 
-    def sample(self, n: int, seed: int = 42) -> ru.SampleAM:
+    def _sample_from_na(self, n: int, **kwargs) -> ru.SampleAM:
         """
-        Sample uniformly from a list of adjacency matrices multiple times with replacement.
-
-        Args:
-            n (int): Number of samples to generate.
-
-        Returns:
-            list: A list of n random adjacency matrices sampled from the list.
+        Sample uniformly from rankings of a given number of alternatives.
+        how to:
+            1. sample the number of tied pairs with probability proportional to the corresponding number of rankings
+            2. sample uniformly points from the unitary sphere
+            3. convert the sample on a sphere to a sample on the rankings
+        updated:
+            1. sample the number of unique ranks with probability proportional to the corresponding number of rankings
+            2. shuffle the unique ranks
+            3. assign to each unique rank a list of indices in the output ranking
         """
-        self.distr = defaultdict(lambda x: 1 / len(self.universe))
-        return ru.SampleAM(np.random.default_rng(seed).choice(self.universe, size=n, replace=True))
+        # self.sphere_sample = sample_from_sphere(n, self.na, self.rng)
+        # self.rankings = rlu.vecs2rv(self.sphere_sample, lower_is_better=True)
+        # return ru.SampleAM.from_rank_function_matrix(self.rankings.T)
+
+        nurs = self.rng.choice(np.arange(self.na) + 1, p=get_unique_ranks_distribution(self.na), size=n)  # number of unique ranks
+        rf = []
+        for nur in nurs:
+            # create an array of length n. Then, for all ranks, sample indices from a pool and assign that rank
+            pool = np.arange(self.na)
+            out = np.empty(self.na, dtype=int)
+            for ir, rank in enumerate(self.rng.choice(np.arange(nur), replace=False, size=nur)):  # shuffle the ranks
+                # last iteration: assign rank to remaning indices
+                if ir == nur - 1:
+                    out[pool] = rank
+                    break
+
+                idx = self.rng.choice(pool, replace=True, size=len(pool) - (nur - ir) + 1)
+                out[idx] = rank
+                pool = np.setdiff1d(pool, idx)
+
+            assert np.isin(np.arange(nur), out).all(), "Not all ranks were used"
+
+            rf.append(out)
+        return ru.SampleAM.from_rank_function_matrix(np.array(rf).T)
 
 
 class DegenerateDistribution(ProbabilityDistribution):
-    def __init__(self, universe: ru.UniverseAM):
-        super().__init__(universe)
+    def __init__(self, *args, element: ru.AdjacencyMatrix = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.pmf = FunctionDefaultDict(lambda x: 1 / self.na)
+        self._check_valid_element(element)
+        self.element = element
 
-    def sample(self, n: int, seed: int = 42, element=None) -> ru.SampleAM:
-        """
-        Sample a single ranking uniformly at random from a list of rankings (represented as
-        adjacency matrices) and replicate it 'n' times. This is a degenerate sampling strategy.
-
-        Args:
-            n (int): Number of samples to generate. Each sample will be a copy of the same
-                     randomly chosen adjacency matrix.
-            seed (int, optional): Seed for the random number generator. Default is 42.
-            elemeent (): object in the universe
-
-        Returns:
-            np.array: A list containing 'n' copies of the same randomly chosen
-                              adjacency matrix from the input list.
-
-        Raises:
-            ValueError: If the input list is empty.
-        """
-
-        # if you know what element you want, return that one
-        if element is not None:
-            if element not in self.universe:
-                raise ValueError("If element is not None, it must belong to self.universe.")
-        # otherwise, return a random one
+    def _sample_from_universe(self, n: int, **kwargs):
+        if self.element is not None:
+            return ru.SampleAM(np.array([self.element]*n))
         else:
-            element = np.random.default_rng(seed).choice(self.universe, size=1)[0]
+            return np.tile(UniformDistribution(universe=self.universe, na=self.na, seed=self.seed).sample(1), n)
 
-        self.distr.update({element: 1})
-        return ru.SampleAM(np.array([element] * n, dtype=self.universe.dtype))
+    def _sample_from_na(self, n: int, **kwargs):
+        if self.element is not None:
+            return ru.SampleAM(np.array([self.element] * n))
+        else:
+            return np.tile(UniformDistribution(universe=self.universe, na=self.na, seed=self.seed).sample(1), n)
 
 
 class MDegenerateDistribution(ProbabilityDistribution):
-    def __init__(self, universe: ru.UniverseAM):
-        super().__init__(universe)
-
-    def sample(self, n: int, seed: int = 42, m: int = 2, elements: ru.UniverseAM = tuple()) -> ru.SampleAM:
-        """
-        Sample bidegenerately from a list of NumPy arrays. The first half of the samples will be
-        the array at the 'first' index of the list, and the second half will be the array at the
-        'second' index. The resulting list is then shuffled.
-
-        Args:
-            n (int): Total number of samples to generate. Must be a positive even number.
-            seed (int): Seed for the random number generator. Default is 42.
-            first (int): Index of the first array to sample in the list. Default is 0.
-            second (int): Index of the second array to sample in the list. Default is 1.
-
-        Returns:
-            List[np.ndarray]: A list of 'n' NumPy arrays sampled bidegenerately from the list.
-
-        Raises:
-            ValueError: If the input list is empty, 'n' is not a positive even number, or
-                        if the list has less than two distinct elements.
-                        :param m: number of elements we are sampling uniformly
-                        :type m: int
-                        :param elements: known elements
-                        :type elements:
-        """
-        if n <= 0 or n % m != 0:
-            raise ValueError("n must be a positive number with n % m == 0.")
-        if not set(elements).issubset(self.universe):
-            raise ValueError("The elements must a subset of self.universe.")
-        if len(elements) > m:
-            raise ValueError("You specificed more elements than can be output.")
-
-        small_universe = list(elements)
-        small_universe.extend(np.random.default_rng(seed).choice(self.universe, m - len(elements)).astype(object))
-        small_universe = np.array(small_universe, dtype=object)
-
-        self.distr.update({x: 1 / m for x in small_universe})
-
-        return ru.SampleAM(np.random.default_rng(seed).permutation(np.repeat(small_universe, n // m)))
-
-
-class CenterProbabilityDistribution(ProbabilityDistribution):
-    def __init__(self, universe: ru.UniverseAM):
-        super().__init__(universe)
-
-    def sample(self, n: int, seed: int = 42, center=None,
-               kernel: ku.Kernel = ku.trivial_kernel,
-               **kernelargs) -> ru.SampleAM:
-
-        # if you know what center you want, use that one
-        if center is not None:
-            if center not in self.universe:
-                raise ValueError("If center is not None, it must belong to self.universe.")
-        # otherwise, use a random one
+    def __init__(self, *args, elements: ru.UniverseAM = None, m: int = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.pmf = FunctionDefaultDict(lambda x: 1 / self.na)
+        self.elements = elements
+        if self.elements is not None:
+            for element in self.elements:
+                self._check_valid_element(element)
         else:
-            center = np.random.default_rng(seed).choice(self.universe, size=1)[0]
+            if m is None:
+                raise ValueError("Either the elements or m must be specified.")
+        self.m = len(self.elements) if self.elements else m
 
-        self.distr = FunctionDefaultDict(lambda x: kernel(center, x, **kernelargs))
-        probs = np.array([kernel(center, x, **kernelargs) for x in self.universe])
-        probs /= probs.sum()
 
-        return ru.SampleAM(
-            np.random.default_rng(seed).choice(self.universe, size=n, replace=True, p=probs).astype(object))
+    def _sample_from_universe(self, n: int, **_):
+        assert n % self.m == 0, "n must be divisible by m."
+        if self.elements is not None:
+            return np.tile(self.elements, n // self.m)
+        else:
+            elements = UniformDistribution(universe=self.universe, na=self.na, seed=self.seed).sample(self.m)
+            return np.tile(elements, n // self.m)
+
+    def _sample_from_na(self, n: int, **_):
+        assert n % self.m == 0, "n must be divisible by m."
+        if self.elements is not None:
+            return np.tile(self.elements, n // self.m)
+        else:
+            elements = UniformDistribution(universe=self.universe, na=self.na, seed=self.seed).sample(self.m)
+            return np.tile(elements, n // self.m)
+
+
+class SpikeDistribution(ProbabilityDistribution):
+
+    def __init__(self, *args, center: ru.AdjacencyMatrix = None, kernel: ku.Kernel = ku.mallows_kernel,
+                 kernelargs: dict = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._check_valid_element(center)
+        self._uniform = UniformDistribution(self.universe, self.na, seed=self.seed)
+        self.center = center if center is not None else self._uniform.sample(1)[0]
+        self.kernel = kernel
+        self.kernelargs = kernelargs or {}
+
+    def _sample_from_na(self, n: int, **_):
+        """
+        sample uniformly, then sample from the sample weighting with the kernel
+        """
+        unif_sample = self._uniform.sample(n)
+        pmf = np.array([self.kernel(self.center, x, **self.kernelargs) for x in unif_sample])
+        self.unif_sample = unif_sample
+        self.pmf = pmf
+
+        return ru.SampleAM(self.rng.choice(unif_sample, size=n, replace=True, p=pmf/pmf.sum()))
+
+
+class BallDistribution(ProbabilityDistribution):
+
+    def __init__(self, *args, center: ru.AdjacencyMatrix = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._check_valid_element(center)
+        raise NotImplementedError
 
 
 class BallProbabilityDistribution(ProbabilityDistribution):
@@ -163,6 +220,7 @@ class BallProbabilityDistribution(ProbabilityDistribution):
 
     def __init__(self, universe: ru.UniverseAM, dimension: int):
         super().__init__(universe, dimension)
+        raise NotImplementedError
 
     def sample(self, n: int, seed: int = 42, center=None, radius: float = 0,
                kind: Literal["ball", "antiball"] = "ball",

@@ -164,7 +164,7 @@ class SampleAM(UniverseAM):
         return self
 
     def get_subsamples_pair(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False,
-                            disjoint: bool = True, use_rv: bool = False):
+                            disjoint: bool = True):
         """
 
         :param seed: passed to the rng
@@ -175,41 +175,54 @@ class SampleAM(UniverseAM):
         :type replace:
         :param disjoint: if True, the returned subsamples have disjoint keys (if use_key) or indices. Allow repetitions between subsamples.
         :type disjoint:
-        :param use_rv: if True, return a rank function matrix
-        :type use_rv:
         :return:
         :rtype:
         """
+
+        if use_key:
+            raise ValueError("use_key = True is not accepted anymore.")
+
         try:
             max_size = len(set(self.key)) if use_key else len(self)
         except AttributeError:
             raise ValueError("The input sample has not key associated to it. Use sample.set_key to set one.")
         max_size //= 2 if disjoint else 1
 
-        if subsample_size > max_size:
+        if not replace and subsample_size > max_size:
             raise ValueError(f"Size of subsamples is too large, must be at most {max_size}.")
 
-        keys = self.key if use_key else range(len(self))
+        rng = np.random.RandomState(seed)
 
-        if disjoint and replace:  # get two disjoint subsamples, sample from them with repetition
-            shuffled = np.random.default_rng(seed).choice(keys, len(keys), replace=False)
-            keys1 = np.random.default_rng(seed+1).choice(shuffled[:len(keys)//2], subsample_size, replace=True)
-            keys2 = np.random.default_rng(seed+3).choice(shuffled[len(keys)//2:], subsample_size, replace=True)
-        elif disjoint or replace:  # if disjoint, sample with no replacement and viceversa
-            keys1, keys2 = np.random.default_rng(seed).choice(keys, 2*subsample_size, replace=replace).reshape(2, subsample_size)
-        else:  # if not disjoint and no replacement, we need to sample twice
-            keys1 = np.random.default_rng(seed).choice(keys, subsample_size, replace=replace)
-            keys2 = np.random.default_rng(seed+1).choice(keys, subsample_size, replace=replace)
+        if disjoint and replace:  # get two disjoint subsamples, then samples from them
+            shuffled = rng.choice(self, len(self), replace=False)
+            out1 = rng.choice(shuffled[:len(self) // 2], subsample_size, replace=True)
+            out2 = rng.choice(shuffled[len(self) // 2:], subsample_size, replace=True)
+        elif disjoint or replace:  # implies replace = not disjoint
+            out1, out2 = rng.choice(self, 2*subsample_size, replace=replace).reshape(2, subsample_size)
+        else:  # if not disjoint and no replacement, we just sample twice
+            out1 = rng.choice(self, subsample_size, replace=False)
+            out2 = rng.choice(self, subsample_size, replace=False)
 
-        mask1 = np.isin(keys, keys1)
-        mask2 = np.isin(keys, keys2)
+        return SampleAM(out1), SampleAM(out2)
 
-        if use_rv:
-            out = self.get_rank_function_matrix()
-            return out[:, mask1], out[:, mask2]
-        else:
-            return self[mask1], self[mask2]
+    def get_subsample(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False):
+        """
+        Get a subsample of self.
+        use_key is deprecated and not supported anymore.
+        """
 
+        if use_key:
+            raise ValueError("use_key = True is not accepted anymore.")
+
+        try:
+            max_size = len(set(self.key)) if use_key else len(self)
+        except AttributeError:
+            raise ValueError("The input sample has not key associated to it. Use sample.set_key to set one.")
+
+        if not replace and subsample_size > max_size:
+            raise ValueError(f"Size of subsamples is too large, must be at most {max_size}.")
+
+        return SampleAM(np.random.default_rng(seed).choice(self, subsample_size, replace=replace))
 
 def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, lower_is_better=True,
                          impute_missing=True, verbose=False) -> pd.DataFrame:
