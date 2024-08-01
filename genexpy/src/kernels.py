@@ -29,8 +29,6 @@ def _mallows_rv(r1: RankVector, r2: RankVector, nu: Union[float, Literal["auto"]
 
 
 def _mallows_bytes(b1: RankByte, b2: RankByte, nu: Union[float, Literal["auto"]] = "auto"):
-    # if nu == "auto":
-    #     nu = 2 / (np.sqrt(len(b1)) * (np.sqrt(len(b1)) - 1))
     i1 = np.frombuffer(b1, dtype=np.int8)
     i2 = np.frombuffer(b2, dtype=np.int8)
     return np.exp(- nu * np.sum(np.abs(i1 - i2)))
@@ -244,7 +242,6 @@ def square_gram_matrix(sample: ru.SampleAM, use_rv: bool = True,
 
     if use_rv:
         sample = sample.to_rank_function_matrix().T  # rows: voters, cols: alternatives
-    # print(sample)
 
     lt = np.zeros((len(sample), len(sample)))
     for (i1, x1) in enumerate(sample):
