@@ -19,7 +19,7 @@ class AdjacencyMatrix(np.ndarray):
     def __new__(cls, input_array):
         assert len(input_array.shape) == 2, "Wrong number of dimensions."
         assert input_array.shape[0] == input_array.shape[1], "An adjacency matrix is always square."
-        assert (input_array == input_array.astype(bool).astype(int)).all(), "Matrix is not boolean."
+        assert np.all(input_array == input_array.astype(bool).astype(int)), "Matrix is not boolean."
         return np.asarray(input_array).view(cls)
 
     @classmethod
