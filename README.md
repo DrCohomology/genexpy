@@ -24,7 +24,7 @@ which you can get [here](https://www.python.org/downloads/release/python-3118/).
 After that, you can install `genexpy` from terminal in one of the following ways. 
 
 ### Download and install from the anonymous repository
-(1) Download the repo and extract the files; (2) navigate to the extracted repo; (3) create a virtual environment `venv`; (4) activate `venv` (the command is for Windows only); (5) install `genexpy`.
+(1) Download the repo and extract the files to a directory named `genexpy`; (2) navigate to `genexpy`; (3) create a virtual environment `venv`; (4) activate `venv` (the command is for Windows only); (5) install `genexpy`.
 ```bash 
 cd genexpy                                                           
 python -m venv venv                                       
