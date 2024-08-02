@@ -23,13 +23,22 @@ As specified in `setup.py`, `genexpy` requires `Python 3.11.8`,
 which you can get [here](https://www.python.org/downloads/release/python-3118/).
 After that, you can install `genexpy` from terminal in one of the following ways. 
 
-### Installation via pip 
+### Download and install from the anonymous repository
+(1) Download the repo and extract the files; (2) navigate to the extracted repo; (3) create a virtual environment `venv`; (4) activate `venv` (the command is for Windows only); (5) install `genexpy`.
+```bash 
+cd genexpy                                                           
+python -m venv venv                                       
+venv\Scripts\activate.bat                                 
+pip install .                                                
+```
+
+### Installation via pip (not working for the anonymous repo)
 _To ensure anonymity, the module is yet to be published: this installation method is not working._
 ```bash
 pip install genexpy
 ```
 
-### Installation via git
+### Installation via git (not working for the anonymous repo)
 (1) Clone the repo; (2) navigate to the cloned repo; (3) install the module.
 ```bash
 git clone https://github.com/DrCohomology/genexpy.git     
@@ -37,7 +46,7 @@ cd genexpy
 pip install .                                             
 ```
 
-### Cloning without installation
+### Cloning without installation (not working for the anonymous repo)
 (1) Clone the repo; (2) navigate to the cloned repo; (3) create a virtual environment `venv`; (4) activate `venv`; 
 (5) install the requirements.
 ```bash
