@@ -1,0 +1,64 @@
+# Paths for the outputs.
+paths:
+  output_dir: outputs
+  figures_dir: figures
+
+# Parameters for the generalizability study:
+  # alpha specifies the desired level of generalizability;
+  # lr_confidence is the width of a confidence interval for the linear regression;
+  # seed is hte random seed passed to np.random.default_rng
+# The other defining parameter for a generalizability analysis, delta, is defined for every kernel differently,
+# as it has different interpretations (see below).
+parameters:
+  alpha: 0.95
+  lr_confidence: 0.9
+  seed: 37
+
+
+# The following entries define the data and how to interpret it.
+    # the dataset is stored in dataset_path. Its primary key consists of the experimental factors + alternatives.
+
+  # An experimental factor is a variable that influences the outcome of an experiment. We distinguish three kinds:
+    # held-constant factors: fixed to a specified level.
+      # factor_name: level_name
+    # design factors: an independent generalizability analysis for every combination of levels of design factors
+      # factor_name: "_all"
+    # allowed-to-vary-factor: the factor for which we want to draw generalizable conclusions.
+      # factor_name: null
+
+  # target: the name of the column, the alternatives are ranked according to it.
+  # alternatives the name of the column listed the compared methods
+data:
+  dataset_path: data/encoders_results.parquet
+  experimental_factors:
+    dataset: null
+    model: "_all"
+    tuning: "no"
+    scoring: "_all"
+  target: "cv_score"
+  alternatives: "encoder"
+
+# Parameteres controlling the iid sampling from valid experimental conditions, to approximate the
+# true distribution of results and compute the MMD between pairs of studies.
+  # sample_size: increment in sample size N
+  # disjoint: if True, compute MMD on two disjoint samples of experimental conditions
+  # replace: if True, compute MMD on two samples of experimental conditions, with replacement
+# We interpret combinations of disjoint and replace as follows:
+  # disjoint = true, replace = true: pessimistic setting, MMD is biased upwardly and generalizability downwardly
+  # disjoint = true, replace = false: realistic setting, no duplicate conditions
+  # disjoint = false, replace = false: optimistic setting, MMD is biased downwardly and generalizability upwardly
+  # disjoint = false, replace = true: --- setting, without clear biases
+sampling:
+  sample_size: 10
+  disjoint: true
+  replace: false
+
+# Each kernel corresponds to a goal of the study.
+  # kernel: the name of a Kernel object in kernels.py, within double quotation marks
+  # params: the parameters of a kernel as defined in kernels.py. Either a value or a list of values
+  # delta: float in [0, 1], defines the similarity threshold between rankings
+kernels:
+  - kernel: "mallows_kernel"
+    params:
+      nu: "auto"                  # kernel bandwidth, auto = 1 /  binom(na, 2)
+    delta: 0.05                   # max fraction of discordant pairs for two rankings to be similar

@@ -6,7 +6,6 @@
         <entry key="$PROJECT_DIR$/.idea/genexpy.iml">
           <value>
             <JupyterConnectionParameters>
-              <option name="argv" value="notebook " />
               <option name="managed" value="true" />
               <option name="sdkName" value="" />
             </JupyterConnectionParameters>
