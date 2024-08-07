@@ -261,7 +261,7 @@ class PMFDistribution(ProbabilityDistribution):
         raise NotImplementedError("Not possible to sample without a universe.")
 
     def sample(self, n: int, **kwargs) -> ru.SampleAM:
-        return ru.SampleAM(np.random.default_rng(self.seed).choice(self.universe, n, replace=True, p=self.pmf/self.pmf.sum()))
+        return ru.SampleAM(self.rng.choice(self.universe, n, replace=True, p=self.pmf/self.pmf.sum()))
 
 
 
