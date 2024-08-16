@@ -27,15 +27,16 @@ def sample_from_sphere(na: int, n: int, rng: np.random.Generator) -> np.ndarray[
     return x / np.linalg.norm(x, axis=1).reshape(-1, 1)
 
 
-def get_unique_ranks_distribution(n, exact=False):
+def get_unique_ranks_distribution(n, exact=False, normalized=True):
     """
     A ranking with ties has a different number of unique ranks. For instance, 0112 has 3 unique ranks.
     Given a ranking of 'n' alternatives, get the number of rankings with k unique ranks for all 1 <= k <= n.
-        closely related to T(n, k) in https://oeis.org/A019538
+        terms n(n-1)/2 + 1 to n(n+1)/2 in T(n, k) in https://oeis.org/A019538
     return the normalized value.
     """
     out = factorial(np.arange(n)+1, exact=exact) * stirling2(n, np.arange(n)+1, exact=exact)
-    return out / out.sum()
+    out = out.astype(float)
+    return out / out.sum() if normalized else out
 
 
 class FunctionDefaultDict(defaultdict):
