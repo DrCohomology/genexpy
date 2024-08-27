@@ -67,7 +67,6 @@ class ProbabilityDistribution(ABC):
         self.sample_time = np.nan
         self.name = "Generic"
 
-
     def _check_valid_element(self, x):
         if x is not None:
             if self.universe is not None and x not in self.universe:
@@ -101,6 +100,7 @@ class ProbabilityDistribution(ABC):
 
     def __str__(self):
         return f"{self.name}(na={self.na}, ties={self.ties})"
+
 
 class UniformDistribution(ProbabilityDistribution):
     def __init__(self, *args, **kwargs):
@@ -257,6 +257,11 @@ class PMFDistribution(ProbabilityDistribution):
             raise ValueError("Universe must be specified for a PMFDistribution.")
         if len(self.universe) != len(self.pmf):
             raise ValueError("The length of universe and pmf must coincide.")
+
+    @classmethod
+    def from_sample(cls, sample: ru.SampleAM, **kwargs):
+        universe, pmf = sample.get_universe_pmf()
+        return PMFDistribution(universe=universe, pmf=pmf, **kwargs)
 
     def _sample_from_na(self, n: int, **kwargs):
         raise NotImplementedError("Not possible to sample without a universe.")

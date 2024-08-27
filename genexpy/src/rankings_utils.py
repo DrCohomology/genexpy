@@ -2,13 +2,13 @@ import math
 import numpy as np
 import pandas as pd
 
+from collections import Counter
 from collections.abc import Collection
 from itertools import permutations
 from tqdm import tqdm
 from typing import AnyStr, Iterable
 
 from . import relation_utils as rlu
-
 
 class AdjacencyMatrix(np.ndarray):
     """
@@ -23,7 +23,7 @@ class AdjacencyMatrix(np.ndarray):
         return np.asarray(input_array).view(cls)
 
     @classmethod
-    def from_rank_function(cls, rv: Iterable):
+    def from_rank_vector(cls, rv: Iterable):
         """
         a rank function maps an alternative into its rank
         """
@@ -44,11 +44,17 @@ class AdjacencyMatrix(np.ndarray):
     def tohashable(self):
         return self.astype(np.int8).tobytes()
 
+    def get_ntiers(self):
+        """
+        Number of unique ranks == number of tiers.
+        """
+        return len(set(np.sum(self, axis=1)))
+
     def __hash__(self):
         return hash(self.tohashable())
 
-    def __iter__(self):
-        pass
+    # def __iter__(self):
+    #     pass
 
 
 class UniverseAM(np.ndarray):
@@ -92,22 +98,25 @@ class UniverseAM(np.ndarray):
 
 class SampleAM(UniverseAM):
 
+    rv = None  # rank vector matrix representation of the sample
+    ntiers = None  # number of tiers per ranking in the sample
+
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls, *args, **kwargs)
 
     @classmethod
-    def from_rank_function_dataframe(cls, rv: pd.DataFrame):
+    def from_rank_vector_dataframe(cls, rv: pd.DataFrame):
         """
         Each row of rv is an alternative.
         Each column of rv is an experimental condition/ voter.
         """
         out = np.empty_like(rv.columns)
         for ic, col in enumerate(rv.columns):
-            out[ic] = AdjacencyMatrix.from_rank_function(rv[col]).tohashable()
+            out[ic] = AdjacencyMatrix.from_rank_vector(rv[col]).tohashable()
         return out.view(cls)
 
     @classmethod
-    def from_rank_function_matrix(cls, rv_matrix):
+    def from_rank_vector_matrix(cls, rv_matrix):
         """
         Convert a rank function matrix into a SampleAM object.
         Each row of rv_matrix is an alternative.
@@ -119,18 +128,18 @@ class SampleAM(UniverseAM):
         # Iterate through each experimental condition/voter
         for ic in range(rv_matrix.shape[1]):
             # Extract the rank function for the current column
-            rank_function = rv_matrix[:, ic]
+            rank_vector = rv_matrix[:, ic]
 
             # Convert the rank function to an adjacency matrix and then to a hashable object
-            out[ic] = AdjacencyMatrix.from_rank_function(rank_function).tohashable()
+            out[ic] = AdjacencyMatrix.from_rank_vector(rank_vector).tohashable()
 
         return out.view(cls)
 
-    def to_rank_function_matrix(self):
+    def to_rank_vector_matrix(self):
         """
         Use the Borda count to rank elements, return the ranks arranged in columns.
         out[i, j] is the rank of alternative (method) i according to voter (experimental condition) j.
-        rv.to_numpy(dtype=int) == self.to_rank_function_matrix()
+        rv.to_numpy(dtype=int) == self.to_rank_vector_matrix()
         """
 
         self._get_na_nv()
@@ -142,16 +151,13 @@ class SampleAM(UniverseAM):
                                    return_inverse=True)[1]
         return out
 
-    def get_rank_function_matrix(self):
+    def get_rank_vector_matrix(self):
         """
         Set the rv attribute of self, containing the rank function representation.
         """
-        try:
-            self.rv
-        except AttributeError:
-            self.rv = self.to_rank_function_matrix()
-        finally:
-            return self.rv
+        if self.rv is None:
+            self.rv = self.to_rank_vector_matrix()
+        return self.rv
 
     def set_key(self, key: Collection):
         """
@@ -191,7 +197,7 @@ class SampleAM(UniverseAM):
         if not replace and subsample_size > max_size:
             raise ValueError(f"Size of subsamples is too large, must be at most {max_size}.")
 
-        rng = np.random.RandomState(seed)
+        rng = np.random.default_rng(seed)
 
         if disjoint and replace:  # get two disjoint subsamples, then samples from them
             shuffled = rng.choice(self, len(self), replace=False)
@@ -224,6 +230,32 @@ class SampleAM(UniverseAM):
 
         return SampleAM(np.random.default_rng(seed).choice(self, subsample_size, replace=replace))
 
+    def get_universe_pmf(self):
+        counter = Counter(self)
+        universe = SampleAM(np.array(list(counter.keys())))
+        pmf = np.array(list(counter.values()))
+        return universe, pmf
+
+    def get_ntiers(self):
+        """
+        Number of tiers of the rankings in the sample.
+        Assumes that the ranks are integers and compact. I.e., ranking 0133 is not valid, 0122 is.
+        """
+        if self.ntiers is None:
+            self.get_rank_vector_matrix()
+            self.ntiers = np.max(self.rv, axis=0) - np.min(self.rv, axis=0)
+        return self.ntiers
+
+    def partition_with_ntiers(self):
+        """
+        Split self into a tuple of arrays. The entries of each array are ranks, and the corresponding rankings have the
+            same number of tiers.
+        Return a dictionary {ntier: column_vector_rankings}
+        """
+        return {ntier: self.get_rank_vector_matrix()[:, self.get_ntiers() == ntier]
+                for ntier in self.get_ntiers()}
+
+
 def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, lower_is_better=True,
                          impute_missing=True, verbose=False) -> pd.DataFrame:
     """
@@ -255,7 +287,7 @@ def universe_untied_rankings(na: int) -> UniverseAM[AdjacencyMatrix]:
     :param na: number of alternatives, i.e., items ranked
     """
     # all possible untied rank functions
-    return UniverseAM(AdjacencyMatrix.from_rank_function(rv) for rv in permutations(range(na)))
+    return UniverseAM(AdjacencyMatrix.from_rank_vector(rv) for rv in permutations(range(na)))
 
 
 # Function for generating Rankings without ties
@@ -283,14 +315,3 @@ def generate_rankings_without_ties(na: int):
     assert (math.factorial(na) == len(total_orders))
 
     return total_orders
-
-
-# TODO: Function for generating Rankings with ties
-def generate_rankings_with_ties(na: int):
-    # could be useful: https://stackoverflow.com/questions/41210142/get-all-permutations-of-a-numpy-array
-    pass
-
-
-# TODO: Function for generating Rankings with ties & fails
-def generate_rankings_with_ties_and_failures(na: int):
-    pass
