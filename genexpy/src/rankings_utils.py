@@ -23,6 +23,10 @@ class AdjacencyMatrix(np.ndarray):
         return np.asarray(input_array).view(cls)
 
     @classmethod
+    def zero(cls, na):
+        return np.ones((na, na)).view(cls)
+
+    @classmethod
     def from_rank_vector(cls, rv: Iterable):
         """
         a rank function maps an alternative into its rank
@@ -94,6 +98,9 @@ class UniverseAM(np.ndarray):
     def get_na(self):
         self._get_na_nv()
         return self.na
+
+    def merge(self, other):
+        return np.unique(np.append(self, other)).view(UniverseAM)
 
 
 class SampleAM(UniverseAM):
@@ -252,8 +259,11 @@ class SampleAM(UniverseAM):
             same number of tiers.
         Return a dictionary {ntier: column_vector_rankings}
         """
-        return {ntier: self.get_rank_vector_matrix()[:, self.get_ntiers() == ntier]
+        return {ntier: self[self.get_ntiers() == ntier]
                 for ntier in self.get_ntiers()}
+
+    def append(self, other):
+        return np.append(self, other).view(SampleAM)
 
 
 def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, lower_is_better=True,

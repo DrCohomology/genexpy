@@ -71,7 +71,7 @@ def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[floa
 
 def _jaccard_rv(r1: RankVector, r2: RankVector, k: int = 1) -> float:
     """
-    Supports tied rankings as columns of the output from SampleAM.to_rank_function_matrix().
+    Supports tied rankings as columns of the output from SampleAM.to_rank_vector_matrix().
     """
     topk1 = np.where(r1 < k)[0]
     topk2 = np.where(r2 < k)[0]
@@ -207,8 +207,8 @@ def gram_matrix(sample1: ru.SampleAM, sample2: ru.SampleAM, use_rv: bool = True,
     """
 
     if use_rv:
-        sample1 = sample1.to_rank_function_matrix().T  # rows: voters, cols: alternatives
-        sample2 = sample2.to_rank_function_matrix().T  #
+        sample1 = sample1.to_rank_vector_matrix().T  # rows: voters, cols: alternatives
+        sample2 = sample2.to_rank_vector_matrix().T  #
 
     out = np.zeros((len(sample1), len(sample2)))
     for (i1, x1), (i2, x2) in product(enumerate(sample1), enumerate(sample2)):
@@ -241,7 +241,7 @@ def square_gram_matrix(sample: ru.SampleAM, use_rv: bool = True,
     """
 
     if use_rv:
-        sample = sample.to_rank_function_matrix().T  # rows: voters, cols: alternatives
+        sample = sample.to_rank_vector_matrix().T  # rows: voters, cols: alternatives
 
     lt = np.zeros((len(sample), len(sample)))
     for (i1, x1) in enumerate(sample):

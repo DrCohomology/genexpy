@@ -1,13 +1,14 @@
-import warnings
-
+import builtins
+import math
 import numpy as np
 import time
+import warnings
 
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from scipy.special import factorial, stirling2
 from tqdm import tqdm
-from typing import Literal
+from typing import Literal, Union
 
 from . import kernels as ku
 from . import rankings_utils as ru
@@ -122,7 +123,7 @@ class UniformDistribution(ProbabilityDistribution):
         """
         # self.sphere_sample = sample_from_sphere(n, self.na, self.rng)
         # self.rankings = rlu.vecs2rv(self.sphere_sample, lower_is_better=True)
-        # return ru.SampleAM.from_rank_function_matrix(self.rankings.T)
+        # return ru.SampleAM.from_rank_vector_matrix(self.rankings.T)
 
         nurs = self.rng.choice(np.arange(self.na) + 1, p=get_unique_ranks_distribution(self.na), size=n)  # number of unique ranks
         rf = []
@@ -143,13 +144,13 @@ class UniformDistribution(ProbabilityDistribution):
             assert np.isin(np.arange(nur), out).all(), "Not all ranks were used"
 
             rf.append(out)
-        return ru.SampleAM.from_rank_function_matrix(np.array(rf).T)
+        return ru.SampleAM.from_rank_vector_matrix(np.array(rf).T)
 
     def _sample_from_na_noties(self, n: int, **kwargs) -> ru.SampleAM :
         """
         Generate permutations of a range(0, na)
         """
-        return ru.SampleAM.from_rank_function_matrix(
+        return ru.SampleAM.from_rank_vector_matrix(
             self.rng.permuted(np.tile(np.arange(self.na), n).reshape(n, self.na), axis=1).T)
 
 
@@ -208,38 +209,65 @@ class MDegenerateDistribution(ProbabilityDistribution):
 
 
 class SpikeDistribution(ProbabilityDistribution):
+    """
+    Sample rankings with probability proportional to their kernel to a given center.
+    The returned sample always contains the center.
+    """
 
     def __init__(self, *args, center: ru.AdjacencyMatrix = None, kernel: ku.Kernel = ku.mallows_kernel,
-                 kernelargs: dict = None, **kwargs):
+                 kernelargs: dict = None, uniform_size_sample: Union[Literal["auto", "n"], int] = "n", **kwargs):
         super().__init__(*args, **kwargs)
         self._check_valid_element(center)
         self._uniform = UniformDistribution(self.universe, self.na, ties=self.ties, seed=self.seed)
-        self.center = center if center is not None else self._uniform.sample(1)[0]
+        self.center = center
+
+        match uniform_size_sample:  # size of the uniform sample used to calculate the kernels to the center
+            case "auto": self.uniform_size_sample = math.factorial(self.na)
+            case "n": self.uniform_size_sample = "n"  # n is the size of the Spike sample as input in self._sample_from_na
+            case builtins.int: self.uniform_size_sample = uniform_size_sample
+        self.uniform_size_sample = math.factorial(self.na) if uniform_size_sample == "auto" else uniform_size_sample
         self.kernel = kernel
-        self.kernelargs = kernelargs or {}
+        # the kernel must have use_rv=False
+        if kernelargs is None:
+            self.kernelargs = {"use_rv": False}
+        else:
+            self.kernelargs = kernelargs.update({"use_rv": False})
         self.name = f"Spike"
+
+
+    def _ntmp(self, n: int):
+        # get the sample size from the uniform distribution
+        if self.uniform_size_sample == "n":
+            return n
+        elif isinstance(self.uniform_size_sample, int):
+            return self.uniform_size_sample
+        else:
+            raise ValueError(f"Unsupported uniform_size_sample with type {type(self.uniform_size_sample)}")
+
 
     def _sample_from_na(self, n: int, **_):
         """
-        sample uniformly, then sample from the sample weighting with the kernel
+        Get a uniform sample with ties, then sample from the uniform sample weighting with the kernel
         """
-        unif_sample = self._uniform.sample(n)
-        pmf = np.array([self.kernel(self.center, x, **self.kernelargs) for x in unif_sample])
+        self.centertmp = self.center or self._uniform.sample(1)[0]
+        unif_sample = self._uniform.sample(self._ntmp(n)).append(self.centertmp)  # add center to sample
+        pmf = np.array([self.kernel(self.centertmp, x, **self.kernelargs) for x in unif_sample])
         self.unif_sample = unif_sample
-        self.pmf = pmf
+        self.pmftmp = pmf
 
-        return ru.SampleAM(self.rng.choice(unif_sample, size=n, replace=True, p=pmf/pmf.sum()))
+        return ru.SampleAM(self.rng.choice(unif_sample, size=n-1, replace=True, p=pmf/pmf.sum())).append(self.centertmp)
 
     def _sample_from_na_noties(self, n: int, **kwargs):
         """
-        sample uniformly, then sample from the sample weighting with the kernel
+        Get a uniform sample without ties, then sample from the uniform sample weighting with the kernel
         """
-        unif_sample = self._uniform.sample(n)
-        pmf = np.array([self.kernel(self.center, x, **self.kernelargs) for x in unif_sample])
-        self.unif_sample = unif_sample
-        self.pmf = pmf
-
-        return ru.SampleAM(self.rng.choice(unif_sample, size=n, replace=True, p=pmf/pmf.sum()))
+        # unif_sample = self._uniform.sample(self._ntmp(n)).merge(self.center)  # add center to sample
+        # pmf = np.array([self.kernel(self.center, x, **self.kernelargs) for x in unif_sample])
+        # self.unif_sample = unif_sample
+        # self.pmf = pmf
+        #
+        # return ru.SampleAM(self.rng.choice(unif_sample, size=n, replace=True, p=pmf/pmf.sum()))
+        return self._sample_from_na(n, **kwargs)
 
 
 class PMFDistribution(ProbabilityDistribution):
@@ -360,7 +388,7 @@ class PMFDistribution(ProbabilityDistribution):
 #
 #         samples = np.column_stack(samples) if samples else np.empty((self.na, 0))
 #
-#         out = ru.SampleAM.from_rank_function_matrix(samples)
+#         out = ru.SampleAM.from_rank_vector_matrix(samples)
 #         out.rv = samples
 #
 #         return out
