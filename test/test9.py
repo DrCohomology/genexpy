@@ -76,28 +76,29 @@ logepss = np.log(np.linspace(0.0001, np.sqrt(2*(1-np.exp(-1))) / 2, 1000))  # fo
 
 rng = np.random.default_rng(1463290)
 
-distr = du.SpikeDistribution(na=5, seed=19, ties=False)
+# distr = du.UniformDistribution(na=2, seed=19, ties=True)
+# distr = du.SpikeDistribution(na=5, seed=19, ties=False)
 # distr = du.DegenerateDistribution(na=na, seed=10)
 
-# universe = ru.SampleAM.from_rank_function_matrix(np.array([[0, 1], [1, 0]]).T)
-# pmf = np.array([7, 3])
-# distr = du.PMFDistribution(universe=universe, pmf=pmf, ties=False)
+universe = ru.SampleAM.from_rank_vector_matrix(np.array([[0, 1], [1, 0]]).T)
+pmf = np.array([7, 3])
+distr = du.PMFDistribution(universe=universe, pmf=pmf, ties=False)
 
 out = []
 outg = []
 # for N in tqdm(list(range(10, maxN+1, step))):
-for N in tqdm([10, 20, 40, 80, 160, 320]):
+for N in tqdm([10, 20, 40, 80, 160]):
     n = N // 2
     sample = distr.sample(N)
     # large_sample = distr.sample(1000)
     sample_n = ru.SampleAM(sample[:n])
-    rv = sample_n.to_rank_function_matrix()
+    rv = sample_n.to_rank_vector_matrix()
 
     # nab, nba = N - sample_n.to_rank_function_matrix().sum(axis=1)  # A better than B, B better than A
     # df_out["bernoulli1"].append(1 - binomtest(nab, N, p=2 / 3, alternative="two-sided").pvalue)
     # df_out["bernoulli2"].append(1 - binomtest(nba, N, p=2 / 3, alternative="two-sided").pvalue)
 
-    mmd_distr = mmd.subsample_mmd_distribution(sample, n, seed=1444+N, use_rv=True, kernel=ku.mallows_kernel, rep=m,
+    mmd_distr = mmd.subsample_mmd_distribution(sample, n, seed=1444+N, use_rv=True, kernel=ku.jaccard_kernel, rep=m,
                                                disjoint=True, replace=False)
     # mmd_distr_ls = mmd.subsample_mmd_distribution(large_sample, n, seed=1333+N, use_rv=True, kernel=ku.mallows_kernel,
     #                                               rep=m, disjoint=False, replace=True)
@@ -138,7 +139,7 @@ ax.set_xscale("log")
 """
 print(np.mean(df_out["nemenyi"] < 0.05))
 this value is one minus the power of the test: probability of falsely rejecting the null when it is true
-    this happens in this case (with a uniform distribution) 
+    this happens in this case (with a uniform distribution)
 """
 
 
@@ -182,6 +183,13 @@ fig = go.Figure(data=[go.Surface(z=dfplotly.values, x=dfplotly.index, y=dfplotly
 fig.update_traces(contours_z=dict(show=True, usecolormap=True,
                                   highlightcolor="limegreen", project_z=True))
 fig.show()
+
+#%% 4. Proper experiment
+"""
+1. Sample from a distribution
+2. Compute p-value and gen from the sample
+3. see whta happens
+"""
 
 
 

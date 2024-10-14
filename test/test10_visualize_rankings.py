@@ -356,7 +356,7 @@ fig.show()
 # fig.show()
 
 
-# %% 2.4 hyperperameters of SOE
+# %% 2.4 hyperperameters of SOE. Seems to be little to no effect. Might be that the optimization is just impossible and it never learns.
 
 from itertools import product
 
