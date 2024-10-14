@@ -15,7 +15,7 @@ class AdjacencyMatrix(np.ndarray):
     Store a ranking as an adjacency matrix.
     M[i, j] = int(R[i] <= R[j])
     """
-
+    __slots__ = ()
     def __new__(cls, input_array):
         assert len(input_array.shape) == 2, "Wrong number of dimensions."
         assert input_array.shape[0] == input_array.shape[1], "An adjacency matrix is always square."

@@ -58,6 +58,11 @@ sampling:
   # params: the parameters of a kernel as defined in kernels.py. Either a value or a list of values
   # delta: float in [0, 1], defines the similarity threshold between rankings
 kernels:
+  - kernel: "jaccard_kernel"
+    params:
+      k: 1                        # number of top tiers considered
+    delta: 0.05                   # minimum intersection over union between top-k tiers for two rankings to be similar
+
   - kernel: "mallows_kernel"
     params:
       nu: "auto"                  # kernel bandwidth, auto = 1 /  binom(na, 2)

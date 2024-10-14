@@ -103,8 +103,8 @@ def predict_nstar(logepss, linear_predictors, dfq, eps):
     return ns_pred, ns_pred_cv, nstar, nstar_lower, nstar_upper
 #%% Computations
 
-distr = du.UniformDistribution(na=4, seed=42, ties=True)
-for repnum in tqdm(range(100), desc="repnum"):
+distr = du.UniformDistribution(na=5, seed=42, ties=True)
+for repnum in tqdm(range(50), desc="repnum"):
     universe = distr.sample(1000)
     for kernelname, (kernel, kernelargs, epsstar, deltastar) in list(KERNELS.items()):
 
@@ -140,13 +140,15 @@ for repnum in tqdm(range(100), desc="repnum"):
 
             # Compute generalizability and quantiles
             logepss = np.linspace(np.log(epsstar) - 0.1,
-                                  np.log(max(np.quantile(mmde, ALPHA) for mmde in mmds.values())) + 0.1,
-                                  1000)  # the bounds are chosen to optimize
+                                  # np.log(max(np.quantile(mmde, ALPHA) for mmde in mmds.values())) + 0.1,
+                                  0.5 * np.log(2),
+                                  1000)
 
             ys = {n: [mmd.generalizability(mmde, np.exp(logeps)) for logeps in logepss] for n, mmde in mmds.items()}
             dfy = pd.DataFrame(ys, index=logepss).reset_index().melt(id_vars='index', var_name='n',
                                                                      value_name='generalizability')
             dfy.rename(columns={'index': 'log(eps)'}, inplace=True)
+            dfy["kernel"] = kernelname
             dfy['n'] = dfy['n'].astype(int)
             dfy["N"] = N
             dfy["repnum"] = repnum
@@ -194,6 +196,18 @@ for repnum in tqdm(range(100), desc="repnum"):
         out = pd.DataFrame(out)
         out.to_parquet(nstar_dir / "nstar.parquet")
 
+#%% fix: add kernel column to dfy (DO NOT RUN)
+
+# for x in tqdm(list(OUTPUT_DIR.glob("**/**/**/dfy_*.parquet")), desc="Updating dataframes"):
+#     d = pd.read_parquet(x)
+#     if "jaccard" in str(x):
+    #     d["kernel"] = "jaccard_kernel_k_1"
+    # elif "mallows" in str(x):
+    #     d["kernel"] = "mallows_kernel_nu_auto"
+    # else:
+    #     raise Exception
+    # d.to_parquet(x)
+
 #%% True n*
 
 @np.vectorize
@@ -206,13 +220,17 @@ dfys = pd.concat([pd.read_parquet(x)
                       for x in tqdm(list(OUTPUT_DIR.glob("**/**/**/dfy_*.parquet")),
                                     desc="Loading dataframes")]).reset_index(drop=True)
 
-nstar_true = dfys.query("N == 1000").loc[(dfys["log(eps)"] <= np.log(epsstar)) & (dfys["generalizability"] >= ALPHA)].groupby("repnum")["n"].min().rename("nstar_true")
+# usually, epssar is very similar for all kernels
+es = [t[2] for t in KERNELS.values()]
+assert np.max(es) - np.min(es) < 0.01, "Epsstar are too different. Improve the code."
+epsstar = np.mean(es)
+nstar_true = dfys.query("N == 1000").loc[(dfys["log(eps)"] <= np.log(epsstar)) & (dfys["generalizability"] >= ALPHA)].groupby(["repnum", "kernel"])["n"].min().rename("nstar_true")
 
 # predicted and theoretical nstars
 df_nstar = pd.concat([pd.read_parquet(x)
                       for x in tqdm(list(OUTPUT_DIR.glob("**/**/**/nstar.parquet")),
                                     desc="Loading dataframes")]).reset_index(drop=True)
-df_nstar = df_nstar.join(nstar_true, on="repnum")
+df_nstar = df_nstar.join(nstar_true, on=["repnum", "kernel"])
 df_nstar["nstar_th"] = theoretical_nstar(df_nstar["alpha"], df_nstar["eps"], kbar=1)
 
 #%% Plotting
@@ -230,17 +248,18 @@ def theoretical_nstar(alphastar, epsstar, kbar=1):
 sns.set(style="ticks", context="paper", font="times new roman")
 
 # mpl.use("TkAgg")
-mpl.rcParams['text.usetex'] = True
+# mpl.rcParams['text.usetex'] = True
 mpl.rcParams['text.latex.preamble'] = r"""
     \usepackage{mathptmx}
     \usepackage{amsmath}
+    \usepackage{nicefrac}
 """
 mpl.rc('font', family='Times New Roman')
 
 # pretty names
-pc = {"alpha": r"$\alpha^*$", "eps": r"$\varepsilon^*$", "nstar": r"$n^*$", "delta": r"$\delta^*$", "N": r"$N$", "nstar_rel_error": "$(n^*-n^*_N) / n^*$"}  # columns
+pc = {"alpha": r"$\alpha^*$", "eps": r"$\varepsilon^*$", "nstar": r"$n^*$", "delta": r"$\delta^*$", "N": r"$N$", "nstar_rel_error": r"$\frac{n^*-n^*_N}{n^*}$"}  # columns
 pk = {"borda_kernel_idx_OHE": r"$\kappa_b^{\text{OHE}, 1/n}$", "mallows_kernel_nu_auto": r"$\kappa_m^{1/\binom{n}{2}}$", "jaccard_kernel_k_1": r"$\kappa_j^{1}$"}  # kernels
-pk.update({"mallows_kernel_nu_auto": r"$g_3$"})
+pk.update({"jaccard_kernel_k_1": r"$g_2$","mallows_kernel_nu_auto": r"$g_3$"})
 
 # get prediction error
 df_ = df_nstar.copy()
@@ -259,15 +278,17 @@ y = pc["nstar_rel_error"]
 fig, ax = plt.subplots(1, 1, figsize=(5.5/2, 2))
 
 sns.boxplot(dfplot, x=pc["N"], y=y, showfliers=False, fliersize=0.3, hue="kernel", palette="cubehelix", ax=ax,
-            legend=False, linewidth=1.2, fill=False, gap=0.5)
+            legend=True, linewidth=1.2, fill=False, gap=0.25)
 
 ax.grid(color="grey", alpha=.2)
-ax.set_yticks([-0.8, -0.6, -0.4, -0.2, 0, 0.2, 0.4, 0.6, 0.8])
+ax.set_yticks([-0.6, -0.3, 0, 0.3, 0.6])
+ax.axhline(0, c="black", lw=0.5)
+
 
 ax.legend(*ax.get_legend_handles_labels()).get_frame().set_edgecolor("w")
 sns.despine()
 plt.tight_layout(pad=.5)
 
-plt.savefig(FIGURES_DIR / "synthetic_nstar_absrel_error.pdf")
+plt.savefig(FIGURES_DIR / "synthetic_nstar_rel_error.pdf")
 plt.show()
 

@@ -264,10 +264,8 @@ class PMFDistribution(ProbabilityDistribution):
     def sample(self, n: int, **kwargs) -> ru.SampleAM:
         return ru.SampleAM(self.rng.choice(self.universe, n, replace=True, p=self.pmf/self.pmf.sum()))
 
-
-
-
-
+    def __str__(self):
+        return f"PMF(na={self.na}, ties={self.ties}, pmf={self.pmf})"
 
 
 #

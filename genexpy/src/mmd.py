@@ -1,5 +1,7 @@
 import numpy as np
 
+from typing import Sequence
+
 from . import rankings_utils as ru
 from .kernels import square_gram_matrix, gram_matrix, trivial_kernel, Kernel
 
@@ -76,5 +78,7 @@ def subsample_mmd_distribution(sample: ru.SampleAM, subsample_size: int,
     return out
 
 # Cumulative function of MMD
-def generalizability(mmd_distr: np.ndarray[float], eps: float) -> float:
-    return float(np.mean(mmd_distr <= eps))
+def generalizability(mmd_distr: np.ndarray[float], eps: float | Sequence[float]) -> np.ndarray[float]:
+    return np.array([np.mean(mmd_distr <= ep) for ep in  np.array([eps]).flatten()])
+
+
