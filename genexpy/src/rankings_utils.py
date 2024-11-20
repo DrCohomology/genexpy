@@ -240,8 +240,8 @@ class SampleAM(UniverseAM):
     def get_universe_pmf(self):
         counter = Counter(self)
         universe = SampleAM(np.array(list(counter.keys())))
-        pmf = np.array(list(counter.values()))
-        return universe, pmf
+        pmf = np.array(list(counter.values()), dtype=float)
+        return universe, pmf / pmf.sum()
 
     def get_ntiers(self):
         """
