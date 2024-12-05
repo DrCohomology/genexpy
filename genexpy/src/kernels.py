@@ -31,7 +31,7 @@ def _mallows_rv(r1: RankVector, r2: RankVector, nu: Union[float, Literal["auto"]
 def _mallows_bytes(b1: RankByte, b2: RankByte, nu: Union[float, Literal["auto"]] = "auto"):
     i1 = np.frombuffer(b1, dtype=np.int8)
     i2 = np.frombuffer(b2, dtype=np.int8)
-    return np.exp(- nu * np.sum(np.abs(i1 - i2)))
+    return np.exp(- nu * np.sum(np.abs(i1 - i2)) / 2)
 
 
 def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[float, Literal["auto"]] = "auto") -> float:
