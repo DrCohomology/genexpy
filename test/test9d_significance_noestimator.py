@@ -126,14 +126,13 @@ def dense2avg_matrix(rv):
     return np.array([dense2avg(r) for r in rv.T]).T
 
 
+# distr = du.UniformDistribution(na=10, ties=True)
+OUTPUT_DIR = Path(os.getcwd()) / "test" / "outputs" / f"test9d_significance"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
 # %% 1. Actual values of generalizability from an empirical distribution
 
-
-kernel = ku.mallows_kernel
-# distr = du.UniformDistribution(na=10, ties=True)
-
-OUTPUT_DIR = Path(os.getcwd()) / "test" / "outputs" / f"test9d_{kernel.__name__}_uniform"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 seeds = range(20)
 n_samples = 20
@@ -337,6 +336,8 @@ df.to_parquet(OUTPUT_DIR / f"dfsig.parquet", index=False)
 
 # %% 2a. get number of significant samples per distribution and best alternatives
 
+df = pd.read_parquet(OUTPUT_DIR / f"dfsig.parquet")
+df["best_avgrk"] = df["best_avgrk"].map(lambda x: tuple(x))
 df_sig = df.query("friedman and conover_any")
 
 pk = ["distr", "size", "tokeep", "significance", "best_avgrk"]
@@ -355,101 +356,84 @@ df_numalt_d = df_numsig_da.query("n_samples > 0").groupby(pk[:-1])["best_avgrk"]
 # entropy of significant best alternatives (higher = more pathological). entropy considers as completely different the best alternatives (4, ) and (4, 1)
 df_entropyalt_d = df_numsig_da.query("n_samples > 0").groupby(pk[:-1])["n_samples"].agg(lambda x: entropy(x)).reset_index().rename(columns={"best_avgrk": "entropy_best"})
 
+# %%
+"""
+For every distribution, find the best alternative in terms of average rank, then compare to thesignificant and not samples. 
+"""
+
+out = []
+for (idx, tokeep), distr in tqdm(list(out_distrs.items())):
+    # get the true best alternative
+    avgrk = np.sum(base_universe.to_rank_vector_matrix() * distr.pmf, axis=1)
+    best_avgrk = np.where(avgrk == avgrk.min())[0][0]
+    out.append({
+        "distr": idx,
+        "tokeep": tokeep,
+        "true_best_avgrk": best_avgrk,
+    })
+
 #%%
+df_truebest = pd.merge(pd.DataFrame(out), df, on=["distr", "tokeep"], how="left")
+df_sig = df_truebest.query("significance == 0.05 and friedman and conover_any")
+# df_faulty_sig = df_sig[df_sig["true_best_avgrk"].apply(lambda x: x in df_sig["best_avgrk"])]
 
-idx = (0, 5, 0.001067691650651292, 0.01)
+faulty = []
+for idx, x in df_sig.iterrows():
+    if x["true_best_avgrk"] not in x["best_avgrk"]:
+        faulty.append(idx)
+df_faulty_sig = df_sig.loc[faulty]
 
 
-# df_ = df.query("friedman == True")
-# df__ = df_.query("conover_any ==  True")
-#
-# # n_sig_best = df__.groupby(["size"])["best_avgrk"].unique()
-# # sig_best = df__.groupby(["size"])["best_avgrk"].unique().map(lambda x : reduce(lambda y, z: set(y).union(z), x))
-#
-# sig_best = df__.groupby(["distr", "size", "tokeep", "significance", "best_avgrk"])["friedman"].count().rename("n_samples").reset_index()
-#
-# print(f"Friedman-significant over total: {len(df_)} / {len(df)} = {len(df_) / len(df):.2f}")
-# print(f"Conover-significant over total: {len(df__)} / {len(df)} = {len(df__) / len(df):.2f}")
-# print(f"Conover over Friedman: {len(df__)} / {len(df_)} = {len(df__) / len(df_):.2f}")
-# print("----")
-# print("Significant best alternatives: ")
-# print(sig_best.groupby("significance").size())
+
+
+
 # %% Plot
-
-from scipy.stats import entropy
 
 """
 For distribution and sample size, plot how many significant alternatives are found
 Also, plot the 
 """
 
-fig, axes = plt.subplots(4, 1, sharex=False, figsize=(10, 15))
+import matplotlib as mpl
+
+mpl.rcParams['text.usetex'] = True
+mpl.rcParams['text.latex.preamble'] = r"""\usepackage{helvet}"""
+mpl.rcParams["font.family"] = "Serif"
+sns.set()
+sns.set_style("white")
+palette = "flare_r"
+sns.set_palette("flare_r")
+
+fig, axes = plt.subplots(2, 1, sharex=True, figsize=(8, 7))
 
 axes = axes.flatten()
 
 ax = axes[0]
-ax.set_title("Number of significant samples per distribution")
+# ax.set_title("Number of significant samples per distribution")
 # sns.lineplot(data=sig_best, x="size", y="n_samples", hue="distr", style="distr", ax=ax, legend=False, palette="rainbow")
 # sns.scatterplot(data=sig_best, x="size", y="n_samples", hue="distr", ax=ax, legend=True, palette="rainbow")
-sns.boxplot(data=df_numsig_d, x="size", y="n_samples", ax=ax, native_scale=False, hue="significance", fill=True, palette="deep")
+sns.boxplot(data=df_numsig_d, x="size", y="n_samples", ax=ax, native_scale=False, hue="significance", fill=True, palette="flare_r", legend=False)
+ax.set_ylabel("No. of samples with significant results\nper distribution")
+
 
 ax = axes[1]
-ax.set_title("Number of significant (at least in one sample) best alternatives per distribution")
-sns.boxplot(data=df_numalt_d, x="size", y="n_best", ax=ax, native_scale=False, hue="significance", palette="deep")
-
-ax = axes[2]
-ax.set_title("Fraction of distributions with more than one significant best alternative")
-df_plot = df_numalt_d.query("n_best > 1").groupby(["significance", "size"])["n_best"].count().reset_index()
-# sns.boxplot(data=df_plot, x="size", y="n_best", ax=ax, hue="significance", palette="deep")
-sns.lineplot(data=df_plot, x="size", y="n_best", ax=ax, hue="significance", palette="deep")
-ax.axhline(0)
-
-ax.set_ylabel("")
-
-# ax = axes[1]
-# ax.set_title("Number of significant samples")
-# # sns.lineplot(data=sig_best, x="size", y="n_samples", hue="distr", style="distr", ax=ax, legend=False, palette="rainbow")
-# # sns.scatterplot(data=sig_best, x="size", y="n_samples", hue="distr", ax=ax, legend=True, palette="rainbow")
-# sns.boxplot(data=sig_best, x="size", y="n_samples", ax=ax, native_scale=False, hue="significance", legend=True, fill=True, palette="deep")
+# ax.set_title("Number of significant (at least in one sample) best alternatives per distribution")
+sns.boxplot(data=df_numalt_d, x="size", y="n_best", ax=ax, native_scale=False, hue="significance", palette="flare_r")
+ax.set_xlabel("sample size")
+ax.set_ylabel("No. of significant best alternatives\nper distribution")
 
 # ax = axes[2]
-# df_plot = sig_best.groupby(["distr", "size", "tokeep", "significance"])["n_samples"].size().reset_index()
-# # sns.lineplot(data=df_plot, x="size", y="n_samples", hue="distr", ax=ax, palette="rainbow")
-# sns.boxplot(data=df_plot, x="size", y="n_samples", ax=ax, native_scale=False, hue="significance", legend=True, fill=True, palette="deep")
-# ax.set_ylabel("Number of best alternatives")
+# ax.set_title("Fraction of distributions with more than one significant best alternative")
+# df_plot = df_numalt_d.query("n_best > 1").groupby(["significance", "size"])["n_best"].count().reset_index()
+# # sns.boxplot(data=df_plot, x="size", y="n_best", ax=ax, hue="significance", palette="deep")
+# sns.lineplot(data=df_plot, x="size", y="n_best", ax=ax, hue="significance", palette="deep")
+# ax.axhline(0)
+# ax.set_ylabel("")
 
-# ax = axes[2]
-# out_ = []
-# for tokeep in df_plot.tokeep.unique():
-#     for n in df_plot["size"].unique():
-#         df_ = df_plot.query("size == @n and tokeep == @tokeep")['n_samples']
-#         tmp1 = len(np.nonzero(df_-1)[0])
-#         tmp2 = len(df_)
-#         out_.append({
-#             "tokeep": tokeep,
-#             "size": n,
-#             "multiple_best": tmp1/tmp2
-#         })
-# df_plot2 = pd.DataFrame(out_)
-# sns.lineplot(df_plot2, x="size", y="multiple_best", hue="significance", palette="deep", legend=False, ax=ax)
-#
-# ax = axes[3]
-# df_plot = sig_best.groupby(["distr", "size", "tokeep"])["n_samples"].agg(lambda x: entropy(x)).reset_index()
-# # sns.lineplot(data=df_plot, x="size", y="n_samples", hue="distr", ax=ax, palette="rainbow")
-# sns.boxplot(data=df_plot, x="size", y="n_samples", ax=ax, native_scale=False, hue="tokeep", legend=False, fill=True, palette="deep")
-
-# ax.set_ylabel("Entropy of best, with annotated ratio of non-null entropyx")
-# ax.set_xscale("log")
-
-# for n in df_plot["size"].unique():
-#     df_ = df_plot.query("size == @n")['n_samples']
-#     tmp1 = len(np.nonzero(df_)[0])
-#     tmp2 = len(df_)
-#     ax.text(n/1.2, 0.9, f"{tmp1/tmp2:.02f}")
-
-
+sns.despine()
 plt.tight_layout()
 fig.savefig(OUTPUT_DIR / "significant_alternatives.png")
+fig.savefig(OUTPUT_DIR / "significant_alternatives.pdf")
 # fig.show()
 
 
@@ -463,13 +447,15 @@ df_faulty contains the number of faulty (distribution, sample_size, significance
 find, within the faulty distributions, the worst one according to the entropy of the distribution of best alternatives 
     for instance, given samples from the same distribution: sample1 -> a1, sample2 -> a2, sample3 -> a1; then compute entropy(a1=2, a2=1)
 
-
 """
+
+
+
 
 pval_max = 0.05
 size_min = 40
 
-df_faulty = df_numalt_d.query("significance <= @pval and "
+df_faulty = df_numalt_d.query("significance <= @pval_max and "
                               "size >= @size_min and "
                               "n_best > 1")
 df_pathological = df_faulty.query("n_best == @df_faulty.n_best.max()")
@@ -480,23 +466,158 @@ df_pathological = df_faulty.query("n_best == @df_faulty.n_best.max()")
 
 df_faulty_da = pd.merge(df_numsig_da.query("n_samples > 0"), df_faulty, on=pk[:-1])
 df_faulty_entr = df_faulty_da.groupby(pk[:-1])["n_samples"].agg(entropy).reset_index().rename(columns={"n_samples": "entropy"})
-idx_maxentr = df_faulty_entr["entropy"].argmax()
+idx_maxentr = df_faulty_entr["entropy"].argmax()  # only four significant samples
+
+idx_maxentr = 2
 distr_idx, tokeep = df_faulty_entr.iloc[idx_maxentr][["distr", "tokeep"]]
 distr = out_distrs[distr_idx, tokeep]
 samples_pathological = [v for k, v in out_samples.items() if k[0] == distr]
 
+# check number of best alternatives
+# ba = [x["best_avgrk"] for x in sigs]
 
-# could we have seen that from generalizability?
-mmd_samples = 
+# share of samples contradicting the best alternative in the distribution
 
+#%% 2b1. Compute generalizability to check if we could have known the different sample behavior
 
+# keep reasonable sized samples
+samples_pathological = [s for s in samples_pathological if len(s) == 40]
 
+SEED = 14444444
+DISJOINT = True
+REPLACE = False
+kernel = ku.jaccard_kernel
+kernelargs = {"k": 1}
+pval = 0.05
+mmdrep = 1000
 
+out = []
+tests_f = []
+tests_ci = []
+for sample in tqdm(samples_pathological, desc="Computing the MMD"):
+    mmds = {
+            n: mmd.subsample_mmd_distribution(
+                sample, subsample_size=n, rep=mmdrep, use_rv=True, use_key=False,
+                seed=SEED, disjoint=DISJOINT, replace=REPLACE, kernel=kernel, **kernelargs
+            )
+            for n in range(2, min(sample.nv // 2 + 1, 20), 2)
+        }
+
+    rv = sample.to_rank_vector_matrix()
+    tmp_friedman = friedmanchisquare(*rv)[1]
+    tmp_conover = sp.posthoc_conover_friedman(rv.T)
+
+    tmp_best_avgrk = np.where(rv.sum(axis=1) == rv.sum(axis=1).min())[0]
+
+    adj = np.array(tmp_conover <= pval).astype(int)  # not transitive adjacency matrix for "a != b"
+
+    # check if all/any of the best alternatives are significantly better than the others
+    # the best alternative (avg rank) is significantly best if conover is rejected for every other alternative
+    tmp_best_sig_all = (adj[tmp_best_avgrk].sum(axis=1) == na - len(tmp_best_avgrk)).all()
+    tmp_best_sig_any = (adj[tmp_best_avgrk].sum(axis=1) == na - len(tmp_best_avgrk)).any()
+
+    out.append({
+        "mmd": mmds,
+        "best_avgrk": tuple(tmp_best_avgrk),
+        "friedman": tmp_friedman <= pval,
+        "conover_all": tmp_best_sig_all,
+        "conover_any": tmp_best_sig_any,
+    })
+    tests_f.append(tmp_friedman)
+    tests_ci.append(tmp_conover)
+
+#%% 2b1a. Take only the significant samples, check generalizability
+
+"""
+hopefully, the generalizability of every sample is the same. we are sample-independent (unlike statistical tests). 
+    we are not fooled by weird samples. 
+"""
+
+alphas = [0.8, 0.9, 0.95, 0.99]
+epss = [np.sqrt(2*(1-x)) for x in [0.99, 0.95, 0.9, 0.8]]
+
+# --- SIGNIFICANT
+sigs = [s for s in out if s["friedman"] and s["conover_any"]]
+
+tmp = []
+for idx, s in enumerate(sigs):
+    for n, mmdn_ in s["mmd"].items():
+        for alpha in alphas:
+            tmp.append({
+                "sample": idx,
+                "size": n,
+                "alpha": alpha,
+                "q": np.quantile(mmdn_, alpha)
+            })
+df_qvar_sig = pd.DataFrame(tmp)
+
+tmp = []
+for idx, s in enumerate(sigs):
+    for n, mmdn_ in s["mmd"].items():
+        for eps in epss:
+            tmp.append({
+                "sample": idx,
+                "size": n,
+                "eps": eps,
+                "gen": np.mean(mmdn_ <= eps)
+            })
+df_genvar_sig = pd.DataFrame(tmp)
+
+# --- ALL
+samples = out.copy()
+
+tmp = []
+for idx, s in enumerate(samples):
+    for n, mmdn_ in s["mmd"].items():
+        for alpha in alphas:
+            tmp.append({
+                "sample": idx,
+                "size": n,
+                "alpha": alpha,
+                "q": np.quantile(mmdn_, alpha)
+            })
+df_qvar = pd.DataFrame(tmp)
+
+tmp = []
+for idx, s in enumerate(samples):
+    for n, mmdn_ in s["mmd"].items():
+        for eps in epss:
+            tmp.append({
+                "sample": idx,
+                "size": n,
+                "eps": eps,
+                "gen": np.mean(mmdn_ <= eps)
+            })
+df_genvar = pd.DataFrame(tmp)
 
 
 #%%
 
+fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+axes = axes.flatten()
 
-"""
-at some point (not many rankings observed), there is only one alternative which is the bets according to avg aranking.
-"""
+ax = axes[0]
+ax.set_title("Estimated quantiles, significant")
+sns.boxplot(df_qvar_sig, x="size", y="q", hue="alpha", ax=ax, native_scale=True)
+
+ax = axes[1]
+ax.set_title("Estimated gen, significant")
+sns.boxplot(df_genvar_sig, x="size", y="gen", hue="eps", ax=ax, native_scale=True)
+
+ax = axes[2]
+ax.set_title("Estimated quantiles")
+sns.boxplot(df_qvar, x="size", y="q", hue="alpha", ax=ax, native_scale=True)
+
+ax = axes[3]
+ax.set_title("Estimated gen")
+sns.boxplot(df_genvar, x="size", y="gen", hue="eps", ax=ax, native_scale=True)
+
+
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / f"variance_generalizability_mmdrep={mmdrep}.png")
+
+
+
+
+
+
