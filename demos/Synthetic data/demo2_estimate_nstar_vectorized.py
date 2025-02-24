@@ -1,3 +1,10 @@
+"""
+vectorized and small n test.
+    try if one can get greater accuracy in estimating nstar from just two values of n (very small)/.
+    it will require more repetitions, but it might be worth it in terms of runtime
+"""
+
+
 import numpy as np
 import os
 import pandas as pd
@@ -10,6 +17,7 @@ from tqdm.auto import tqdm
 
 from genexpy import lower_bounds as gu
 from genexpy import kernels as ku
+from genexpy import kernels_vectorized as kvu
 from genexpy import rankings_utils as ru
 from genexpy import mmd as mmd
 from genexpy import probability_distributions as du
@@ -54,6 +62,7 @@ for kernel_config in config['kernels']:
                 raise ValueError(
                     f"The kernel {kernel_config['kernel']} must be either the Jaccard, Mallows, or Borda kernel.")
 
+#!! BROKEN BS: CAN ONLY LOAD ONE PARAMETER VALUE AT A TIME
         for param_key, param_values in kernel_config['params'].items():
             if isinstance(param_values, list):
                 for value in param_values:
@@ -66,6 +75,14 @@ for kernel_config in config['kernels']:
                 KERNELS[kernel_name] = (kernel_func, params, eps, delta)
     else:
         print(f"Kernel function '{kernel_config['kernel']}' not found in module 'kernels'.")
+
+
+#! DIRTY, BUT IT WORKS FOR TESTING ONLY
+KERNELS = {k: list(v) for k, v in KERNELS.items()}
+KERNELS["borda_kernel_nu_auto"][1] = {"nu": "auto", "idx": 0}
+KERNELS = {k: tuple(v) for k, v in KERNELS.items()}
+del KERNELS["borda_kernel_alternative_0"]
+
 
 def create_quantiles_dataframe(mmds):
     qs = {n: np.log(np.quantile(mmde, ALPHA)) for n, mmde in mmds.items()}
@@ -101,12 +118,14 @@ def predict_nstar(logepss, linear_predictors, dfq, eps):
     nstar_lower, nstar_upper = np.quantile(nstar_cv, [CI_LOWER, CI_UPPER])
     return ns_pred, ns_pred_cv, nstar, nstar_lower, nstar_upper
 #%% Computations
+from importlib import reload
+reload(kvu)
 
 distr = du.UniformDistribution(na=5, seed=42, ties=True)
-for DISJOINT in [False]:
-    for REPLACE in [False]:
+for DISJOINT in [True, False]:
+    for REPLACE in [True, False]:
 
-        OUTPUT_DIR = Path("better_outputs") / f"disjoint={DISJOINT}_replace={REPLACE}"
+        OUTPUT_DIR = Path("better_vectorized_outputs") / f"disjoint={DISJOINT}_replace={REPLACE}"
 
         for repnum in tqdm(range(100), desc=f"repnum_disjoint={DISJOINT}_replace={REPLACE}"):
             universe = distr.sample(1000)
@@ -129,15 +148,8 @@ for DISJOINT in [False]:
                 for N in [1000, 10, 20, 40, 80]:  # size of empirical study, the first N corresponds to an ideal study
 
                     rankings = universe.get_subsample(subsample_size=N, seed=43*repnum)
-
-                    # Sample the distribution of MMD for varying sizes
-                    mmds = {
-                        n: mmd.subsample_mmd_distribution(
-                            rankings, subsample_size=n, rep=100, use_rv=True, use_key=False,
-                            seed=SEED, disjoint=DISJOINT, replace=REPLACE, kernel=kernel, **kernelargs
-                        )
-                        for n in range(2, min(30, N // 2 + 1))
-                    }
+                    mmds = {n: kvu.mmd_distribution(sample=rankings, n=n, rep=1000, kernel_name=kernelname.split("_")[0], **kernelargs)
+                            for n in [3, 5]}
 
                     dfmmd = pd.DataFrame(mmds).melt(var_name="n", value_name="eps")
                     dfmmd["repnum"] = repnum
@@ -206,7 +218,7 @@ dfys = []
 df_nstar = []
 for DISJOINT in [True, False]:
     for REPLACE in [True, False]:
-        OUTPUT_DIR = Path("better_outputs") / f"disjoint={DISJOINT}_replace={REPLACE}"
+        OUTPUT_DIR = Path("better_vectorized_outputs") / f"disjoint={DISJOINT}_replace={REPLACE}"
         
         @np.vectorize
         def theoretical_nstar(alphastar, epsstar, kbar=1):
@@ -285,9 +297,9 @@ for ax, (DISJOINT, REPLACE) in zip(axes.flatten(), product([True, False], repeat
     ax.set_title(f"disjoint={DISJOINT}, replace={REPLACE}")
     dfplot_ = dfplot.query(f"disjoint == {DISJOINT} and replace == {REPLACE}")
 
-    # sns.boxplot(dfplot_, x=pc["N"], y=y, showfliers=True, fliersize=0.3, hue="kernel", palette="cubehelix", ax=ax,
-    #             legend=False, linewidth=1.2, fill=False, gap=0.5)
-    sns.violinplot(dfplot_, x=pc["N"], y=y, legend=False, hue="kernel", palette="cubehelix", ax=ax, fill=False)
+    sns.boxplot(dfplot_, x=pc["N"], y=y, showfliers=True, fliersize=0.3, hue="kernel", palette="cubehelix", ax=ax,
+                legend=False, linewidth=1.2, fill=False, gap=0.5)
+    # sns.violinplot(dfplot_, x=pc["N"], y=y, legend=False, hue="kernel", palette="cubehelix", ax=ax, fill=False)
 
     ax.grid(color="grey", alpha=.2)
     # ax.set_yticks([-0.8, -0.6, -0.4, -0.2, 0, 0.2, 0.4, 0.6, 0.8])
@@ -296,8 +308,8 @@ for ax, (DISJOINT, REPLACE) in zip(axes.flatten(), product([True, False], repeat
     sns.despine()
 plt.tight_layout(pad=.5)
 
-# plt.savefig(FIGURES_DIR / f"synthetic_{error_toplot}_all_combinations.pdf")
-plt.savefig(FIGURES_DIR / f"synthetic_violin_{error_toplot}_all_combinations.pdf")
+plt.savefig(FIGURES_DIR / f"synthetic_{error_toplot}_all_combinations.pdf")
+plt.savefig(FIGURES_DIR / f"synthetic_vectorized_{error_toplot}_all_combinations.pdf")
 # plt.show()
 plt.close("all")
 

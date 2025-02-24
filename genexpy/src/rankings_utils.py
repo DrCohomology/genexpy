@@ -6,9 +6,10 @@ from collections import Counter
 from collections.abc import Collection
 from itertools import permutations
 from tqdm import tqdm
-from typing import AnyStr, Iterable
+from typing import AnyStr, Iterable, Tuple
 
 from . import relation_utils as rlu
+
 
 class AdjacencyMatrix(np.ndarray):
     """
@@ -77,9 +78,8 @@ class UniverseAM(np.ndarray):
                 return input_iter.view(cls)
             raise ValueError("Invalid input to UniverseAM.")
 
-    def to_array_list(self, shape: Iterable[int]):
-        # return [AdjacencyMatrix(np.frombuffer(x, dtype=int).reshape(shape)) for x in self]
-        return [AdjacencyMatrix.from_bytes(x, shape) for x in self]
+    def to_adjmat_array(self, shape: Iterable[int]):
+        return np.array([AdjacencyMatrix.from_bytes(x, shape) for x in self])
 
     def __contains__(self, bstring):
         """
@@ -218,6 +218,7 @@ class SampleAM(UniverseAM):
 
         return SampleAM(out1), SampleAM(out2)
 
+
     def get_subsample(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False):
         """
         Get a subsample of self.
@@ -264,6 +265,123 @@ class SampleAM(UniverseAM):
 
     def append(self, other):
         return np.append(self, other).view(SampleAM)
+
+    def _multisample_disjoint_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of subsamples of size 'n', sampled with replacement from disjoint subsamples of 'self'.
+        'self' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of sample (rep, N).
+        2. Shuffle each row independently.
+        3. Split every row (roughly) in half and sample from each half independently.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        shuffled = rng.permuted(samples, axis=1)
+        subs1 = np.array([rng.choice(sub, n, replace=True) for sub in shuffled[:, :N // 2]])  # (rep, n)
+        subs2 = np.array([rng.choice(sub, n, replace=True) for sub in shuffled[:, N // 2:]])  # (rep, n)
+
+        return subs1, subs2
+
+
+    def _multisample_disjoint_not_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of subsamples of size 'n', sampled with replacement from disjoint subsamples of 'self'.
+        'self' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of self (rep, N).
+        2. Shuffle each row independently.
+        3. Split every row (roughly) in half and sample from each half independently.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        shuffled = rng.permuted(samples, axis=1)
+        subs1 = np.array([rng.choice(sub, n, replace=False) for sub in shuffled[:, :N // 2]])  # (rep, n)
+        subs2 = np.array([rng.choice(sub, n, replace=False) for sub in shuffled[:, N // 2:]])  # (rep, n)
+
+        return subs1, subs2
+
+
+    def _multisample_not_disjoint_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of samples of size 'n', sampled with replacement from 'sample'.
+        'sample' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of sample (rep, N).
+        2. Get a sample of size 2n from each row independently.
+        3. Split the rows in half.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        tmp = np.array([rng.choice(sub, 2 * n, replace=True) for sub in samples])  # (rep, 2*n)
+        subs1 = tmp[:, :N // 2]
+        subs2 = tmp[:, N // 2:]
+
+        return subs1, subs2
+
+
+    def _multisample_not_disjoint_not_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of samples of size 'n', sampled with replacement from 'self'.
+        'sample' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of self (rep, N).
+        2. Get a sample without replacement of size 2n from each row independently.
+        3. Split the rows in half.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        subs1 = np.array([rng.choice(sub, n, replace=False) for sub in samples])  # (rep, n)
+        subs2 = np.array([rng.choice(sub, n, replace=False) for sub in samples])  # (rep, n)
+
+        return MultiSampleAM(subs1), MultiSampleAM(subs2)
+
+
+    def get_multisample_pair(self, subsample_size: int, rep: int, seed: int, disjoint: bool = True,
+                             replace: bool = False):
+        """
+        Get 'rep' pairs of subsamples of size 'n', sampled from 'self' (which has shape (N, )).
+        If disjoint is True, the subsampled are sampled form two disjoint pools of indices of 'self'.
+        If replace is True, the sampling is with replacement.
+        """
+
+        rng = np.random.default_rng(seed)
+
+        match (disjoint, replace):
+            case (True, True):
+                return self._multisample_disjoint_replace(rep=rep, n=subsample_size, rng=rng)
+            case (True, False):
+                return self._multisample_disjoint_not_replace(rep=rep, n=subsample_size, rng=rng)
+            case (False, True):
+                return self._multisample_not_disjoint_replace(rep=rep, n=subsample_size, rng=rng)
+            case (False, False):
+                return self._multisample_not_disjoint_not_replace(rep=rep, n=subsample_size, rng=rng)
+
+
+class MultiSampleAM(np.ndarray):
+    """
+    A sample of samples (a 2d sample).
+
+    rep is the number of samples.
+    na is the number of alternatives.
+    n is the size of the samples.
+    """
+
+    def __new__(cls, input_iter: Iterable):
+        return np.asarray(input_iter).view(cls)
+
+    def to_rank_vectors(self):
+        return np.array([SampleAM(sample).to_rank_vector_matrix() for sample in self])      # (rep, na, n)
+
+    def to_adjacency_matrices(self, na: int):
+        return np.array([[AdjacencyMatrix.from_bytes(r, shape=(na, na)) for r in sample] for sample in self])    # (rep, n, na, na)
+
+
+
 
 
 def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, lower_is_better=True,

@@ -50,8 +50,8 @@ data:
   # disjoint = false, replace = true: --- setting, without clear biases
 sampling:
   sample_size: 10
-  disjoint: true
-  replace: false
+  disjoint: false
+  replace: true
 
 # Each kernel corresponds to a goal of the study.
   # kernel: the name of a Kernel object in kernels.py, within double quotation marks
@@ -62,3 +62,16 @@ kernels:
     params:
       nu: "auto"                  # kernel bandwidth, auto = 1 /  binom(na, 2)
     delta: 0.05                   # max fraction of discordant pairs for two rankings to be similar
+
+  - kernel: "jaccard_kernel"
+    params:
+      k: 1                        # number of top tiers considered
+    delta: 0.05                   # minimum intersection over union between top-k tiers for two rankings to be similar
+
+  - kernel: "borda_kernel"
+    params:
+      alternative: "0"                 # alternative of interest
+      nu: "auto"
+    delta: 0.05                   # max difference in relative position of 'idx' for two rankings to be similar
+
+
