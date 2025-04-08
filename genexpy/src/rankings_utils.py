@@ -2,10 +2,11 @@ import math
 import numpy as np
 import pandas as pd
 
+from collections import Counter
 from collections.abc import Collection
 from itertools import permutations
 from tqdm import tqdm
-from typing import AnyStr, Iterable
+from typing import AnyStr, Iterable, Tuple
 
 from . import relation_utils as rlu
 
@@ -23,7 +24,11 @@ class AdjacencyMatrix(np.ndarray):
         return np.asarray(input_array).view(cls)
 
     @classmethod
-    def from_rank_function(cls, rv: Iterable):
+    def zero(cls, na):
+        return np.ones((na, na)).view(cls)
+
+    @classmethod
+    def from_rank_vector(cls, rv: Iterable):
         """
         a rank function maps an alternative into its rank
         """
@@ -44,11 +49,17 @@ class AdjacencyMatrix(np.ndarray):
     def tohashable(self):
         return self.astype(np.int8).tobytes()
 
+    def get_ntiers(self):
+        """
+        Number of unique ranks == number of tiers.
+        """
+        return len(set(np.sum(self, axis=1)))
+
     def __hash__(self):
         return hash(self.tohashable())
 
-    def __iter__(self):
-        pass
+    # def __iter__(self):
+    #     pass
 
 
 class UniverseAM(np.ndarray):
@@ -67,9 +78,8 @@ class UniverseAM(np.ndarray):
                 return input_iter.view(cls)
             raise ValueError("Invalid input to UniverseAM.")
 
-    def to_array_list(self, shape: Iterable[int]):
-        # return [AdjacencyMatrix(np.frombuffer(x, dtype=int).reshape(shape)) for x in self]
-        return [AdjacencyMatrix.from_bytes(x, shape) for x in self]
+    def to_adjmat_array(self, shape: Iterable[int]):
+        return np.array([AdjacencyMatrix.from_bytes(x, shape) for x in self])
 
     def __contains__(self, bstring):
         """
@@ -89,25 +99,31 @@ class UniverseAM(np.ndarray):
         self._get_na_nv()
         return self.na
 
+    def merge(self, other):
+        return np.unique(np.append(self, other)).view(UniverseAM)
+
 
 class SampleAM(UniverseAM):
+
+    rv = None  # rank vector matrix representation of the sample
+    ntiers = None  # number of tiers per ranking in the sample
 
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls, *args, **kwargs)
 
     @classmethod
-    def from_rank_function_dataframe(cls, rv: pd.DataFrame):
+    def from_rank_vector_dataframe(cls, rv: pd.DataFrame):
         """
         Each row of rv is an alternative.
         Each column of rv is an experimental condition/ voter.
         """
         out = np.empty_like(rv.columns)
         for ic, col in enumerate(rv.columns):
-            out[ic] = AdjacencyMatrix.from_rank_function(rv[col]).tohashable()
+            out[ic] = AdjacencyMatrix.from_rank_vector(rv[col]).tohashable()
         return out.view(cls)
 
     @classmethod
-    def from_rank_function_matrix(cls, rv_matrix):
+    def from_rank_vector_matrix(cls, rv_matrix):
         """
         Convert a rank function matrix into a SampleAM object.
         Each row of rv_matrix is an alternative.
@@ -119,18 +135,18 @@ class SampleAM(UniverseAM):
         # Iterate through each experimental condition/voter
         for ic in range(rv_matrix.shape[1]):
             # Extract the rank function for the current column
-            rank_function = rv_matrix[:, ic]
+            rank_vector = rv_matrix[:, ic]
 
             # Convert the rank function to an adjacency matrix and then to a hashable object
-            out[ic] = AdjacencyMatrix.from_rank_function(rank_function).tohashable()
+            out[ic] = AdjacencyMatrix.from_rank_vector(rank_vector).tohashable()
 
         return out.view(cls)
 
-    def to_rank_function_matrix(self):
+    def to_rank_vector_matrix(self):
         """
         Use the Borda count to rank elements, return the ranks arranged in columns.
         out[i, j] is the rank of alternative (method) i according to voter (experimental condition) j.
-        rv.to_numpy(dtype=int) == self.to_rank_function_matrix()
+        rv.to_numpy(dtype=int) == self.to_rank_vector_matrix()
         """
 
         self._get_na_nv()
@@ -142,16 +158,13 @@ class SampleAM(UniverseAM):
                                    return_inverse=True)[1]
         return out
 
-    def get_rank_function_matrix(self):
+    def get_rank_vector_matrix(self):
         """
         Set the rv attribute of self, containing the rank function representation.
         """
-        try:
-            self.rv
-        except AttributeError:
-            self.rv = self.to_rank_function_matrix()
-        finally:
-            return self.rv
+        if self.rv is None:
+            self.rv = self.to_rank_vector_matrix()
+        return self.rv
 
     def set_key(self, key: Collection):
         """
@@ -191,7 +204,7 @@ class SampleAM(UniverseAM):
         if not replace and subsample_size > max_size:
             raise ValueError(f"Size of subsamples is too large, must be at most {max_size}.")
 
-        rng = np.random.RandomState(seed)
+        rng = np.random.default_rng(seed)
 
         if disjoint and replace:  # get two disjoint subsamples, then samples from them
             shuffled = rng.choice(self, len(self), replace=False)
@@ -204,6 +217,7 @@ class SampleAM(UniverseAM):
             out2 = rng.choice(self, subsample_size, replace=False)
 
         return SampleAM(out1), SampleAM(out2)
+
 
     def get_subsample(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False):
         """
@@ -223,6 +237,152 @@ class SampleAM(UniverseAM):
             raise ValueError(f"Size of subsamples is too large, must be at most {max_size}.")
 
         return SampleAM(np.random.default_rng(seed).choice(self, subsample_size, replace=replace))
+
+    def get_universe_pmf(self):
+        counter = Counter(self)
+        universe = SampleAM(np.array(list(counter.keys())))
+        pmf = np.array(list(counter.values()), dtype=float)
+        return universe, pmf / pmf.sum()
+
+    def get_ntiers(self):
+        """
+        Number of tiers of the rankings in the sample.
+        Assumes that the ranks are integers and compact. I.e., ranking 0133 is not valid, 0122 is.
+        """
+        if self.ntiers is None:
+            self.get_rank_vector_matrix()
+            self.ntiers = np.max(self.rv, axis=0) - np.min(self.rv, axis=0)
+        return self.ntiers
+
+    def partition_with_ntiers(self):
+        """
+        Split self into a tuple of arrays. The entries of each array are ranks, and the corresponding rankings have the
+            same number of tiers.
+        Return a dictionary {ntier: column_vector_rankings}
+        """
+        return {ntier: self[self.get_ntiers() == ntier]
+                for ntier in self.get_ntiers()}
+
+    def append(self, other):
+        return np.append(self, other).view(SampleAM)
+
+    def _multisample_disjoint_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of subsamples of size 'n', sampled with replacement from disjoint subsamples of 'self'.
+        'self' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of sample (rep, N).
+        2. Shuffle each row independently.
+        3. Split every row (roughly) in half and sample from each half independently.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        shuffled = rng.permuted(samples, axis=1)
+        subs1 = np.array([rng.choice(sub, n, replace=True) for sub in shuffled[:, :N // 2]])  # (rep, n)
+        subs2 = np.array([rng.choice(sub, n, replace=True) for sub in shuffled[:, N // 2:]])  # (rep, n)
+
+        return subs1, subs2
+
+
+    def _multisample_disjoint_not_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of subsamples of size 'n', sampled with replacement from disjoint subsamples of 'self'.
+        'self' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of self (rep, N).
+        2. Shuffle each row independently.
+        3. Split every row (roughly) in half and sample from each half independently.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        shuffled = rng.permuted(samples, axis=1)
+        subs1 = np.array([rng.choice(sub, n, replace=False) for sub in shuffled[:, :N // 2]])  # (rep, n)
+        subs2 = np.array([rng.choice(sub, n, replace=False) for sub in shuffled[:, N // 2:]])  # (rep, n)
+
+        return subs1, subs2
+
+
+    def _multisample_not_disjoint_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of samples of size 'n', sampled with replacement from 'sample'.
+        'sample' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of sample (rep, N).
+        2. Get a sample of size 2n from each row independently.
+        3. Split the rows in half.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        tmp = np.array([rng.choice(sub, 2 * n, replace=True) for sub in samples])  # (rep, 2*n)
+        subs1 = tmp[:, :N // 2]
+        subs2 = tmp[:, N // 2:]
+
+        return subs1, subs2
+
+
+    def _multisample_not_disjoint_not_replace(self, rep: int, n: int, rng: np.random.Generator):
+        """
+        Get 'rep' pairs of samples of size 'n', sampled with replacement from 'self'.
+        'sample' has shape (N. ).
+
+        Algorithm:
+        1. Get rep copies of self (rep, N).
+        2. Get a sample without replacement of size 2n from each row independently.
+        3. Split the rows in half.
+        """
+        N = len(self)
+        samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
+        subs1 = np.array([rng.choice(sub, n, replace=False) for sub in samples])  # (rep, n)
+        subs2 = np.array([rng.choice(sub, n, replace=False) for sub in samples])  # (rep, n)
+
+        return MultiSampleAM(subs1), MultiSampleAM(subs2)
+
+
+    def get_multisample_pair(self, subsample_size: int, rep: int, seed: int, disjoint: bool = True,
+                             replace: bool = False):
+        """
+        Get 'rep' pairs of subsamples of size 'n', sampled from 'self' (which has shape (N, )).
+        If disjoint is True, the subsampled are sampled form two disjoint pools of indices of 'self'.
+        If replace is True, the sampling is with replacement.
+        """
+
+        rng = np.random.default_rng(seed)
+
+        match (disjoint, replace):
+            case (True, True):
+                return self._multisample_disjoint_replace(rep=rep, n=subsample_size, rng=rng)
+            case (True, False):
+                return self._multisample_disjoint_not_replace(rep=rep, n=subsample_size, rng=rng)
+            case (False, True):
+                return self._multisample_not_disjoint_replace(rep=rep, n=subsample_size, rng=rng)
+            case (False, False):
+                return self._multisample_not_disjoint_not_replace(rep=rep, n=subsample_size, rng=rng)
+
+
+class MultiSampleAM(np.ndarray):
+    """
+    A sample of samples (a 2d sample).
+
+    rep is the number of samples.
+    na is the number of alternatives.
+    n is the size of the samples.
+    """
+
+    def __new__(cls, input_iter: Iterable):
+        return np.asarray(input_iter).view(cls)
+
+    def to_rank_vectors(self):
+        return np.array([SampleAM(sample).to_rank_vector_matrix() for sample in self])      # (rep, na, n)
+
+    def to_adjacency_matrices(self, na: int):
+        return np.array([[AdjacencyMatrix.from_bytes(r, shape=(na, na)) for r in sample] for sample in self])    # (rep, n, na, na)
+
+
+
+
 
 def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, lower_is_better=True,
                          impute_missing=True, verbose=False) -> pd.DataFrame:
@@ -255,7 +415,7 @@ def universe_untied_rankings(na: int) -> UniverseAM[AdjacencyMatrix]:
     :param na: number of alternatives, i.e., items ranked
     """
     # all possible untied rank functions
-    return UniverseAM(AdjacencyMatrix.from_rank_function(rv) for rv in permutations(range(na)))
+    return UniverseAM(AdjacencyMatrix.from_rank_vector(rv) for rv in permutations(range(na)))
 
 
 # Function for generating Rankings without ties
@@ -283,14 +443,3 @@ def generate_rankings_without_ties(na: int):
     assert (math.factorial(na) == len(total_orders))
 
     return total_orders
-
-
-# TODO: Function for generating Rankings with ties
-def generate_rankings_with_ties(na: int):
-    # could be useful: https://stackoverflow.com/questions/41210142/get-all-permutations-of-a-numpy-array
-    pass
-
-
-# TODO: Function for generating Rankings with ties & fails
-def generate_rankings_with_ties_and_failures(na: int):
-    pass

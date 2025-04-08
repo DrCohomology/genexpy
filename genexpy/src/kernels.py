@@ -21,17 +21,17 @@ Ranking: TypeAlias = Union[RankVector, RankByte]
 @njit
 def _mallows_rv(r1: RankVector, r2: RankVector, nu: Union[float, Literal["auto"]] = "auto") -> float:
     n = len(r1)
-    out = 0
+    out = 0  # twice the number of discordant pairs ((tie, not-tie) counts as 1/2 discordant)
     for i in range(n):
         for j in range(i):
             out += np.abs(np.sign(r1[i] - r1[j]) - np.sign(r2[i] - r2[j]))
-    return np.exp(- nu * out)
+    return np.exp(- nu * out / 2)
 
 
 def _mallows_bytes(b1: RankByte, b2: RankByte, nu: Union[float, Literal["auto"]] = "auto"):
     i1 = np.frombuffer(b1, dtype=np.int8)
     i2 = np.frombuffer(b2, dtype=np.int8)
-    return np.exp(- nu * np.sum(np.abs(i1 - i2)))
+    return np.exp(- nu * np.sum(np.abs(i1 - i2)) / 2)
 
 
 def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[float, Literal["auto"]] = "auto") -> float:
@@ -60,6 +60,7 @@ def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[floa
     if nu == "auto":
         n = len(x1) if use_rv else np.sqrt(len(x1))
         nu = 2 / (n*(n-1))
+
     if use_rv:
         return _mallows_rv(x1, x2, nu=nu)
     else:
@@ -71,7 +72,7 @@ def mallows_kernel(x1: Ranking, x2: Ranking, use_rv: bool = True, nu: Union[floa
 
 def _jaccard_rv(r1: RankVector, r2: RankVector, k: int = 1) -> float:
     """
-    Supports tied rankings as columns of the output from SampleAM.to_rank_function_matrix().
+    Supports tied rankings as columns of the output from SampleAM.to_rank_vector_matrix().
     """
     topk1 = np.where(r1 < k)[0]
     topk2 = np.where(r2 < k)[0]
@@ -207,8 +208,8 @@ def gram_matrix(sample1: ru.SampleAM, sample2: ru.SampleAM, use_rv: bool = True,
     """
 
     if use_rv:
-        sample1 = sample1.to_rank_function_matrix().T  # rows: voters, cols: alternatives
-        sample2 = sample2.to_rank_function_matrix().T  #
+        sample1 = sample1.to_rank_vector_matrix().T  # rows: voters, cols: alternatives
+        sample2 = sample2.to_rank_vector_matrix().T  #
 
     out = np.zeros((len(sample1), len(sample2)))
     for (i1, x1), (i2, x2) in product(enumerate(sample1), enumerate(sample2)):
@@ -241,10 +242,11 @@ def square_gram_matrix(sample: ru.SampleAM, use_rv: bool = True,
     """
 
     if use_rv:
-        sample = sample.to_rank_function_matrix().T  # rows: voters, cols: alternatives
+        sample = sample.to_rank_vector_matrix().T  # rows: voters, cols: alternatives
 
+    #todo vectorize
     lt = np.zeros((len(sample), len(sample)))
-    for (i1, x1) in enumerate(sample):
+    for i1, x1 in enumerate(sample):
         for i2, x2 in enumerate(sample):
             if i1 <= i2:
                 break
