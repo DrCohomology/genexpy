@@ -244,8 +244,9 @@ def square_gram_matrix(sample: ru.SampleAM, use_rv: bool = True,
     if use_rv:
         sample = sample.to_rank_vector_matrix().T  # rows: voters, cols: alternatives
 
+    #todo vectorize
     lt = np.zeros((len(sample), len(sample)))
-    for (i1, x1) in enumerate(sample):
+    for i1, x1 in enumerate(sample):
         for i2, x2 in enumerate(sample):
             if i1 <= i2:
                 break

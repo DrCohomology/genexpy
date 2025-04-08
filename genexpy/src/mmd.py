@@ -40,7 +40,8 @@ def mmdu_squared(sample1: ru.SampleAM, sample2: ru.SampleAM, use_rv: bool = True
 def subsample_mmd_distribution(sample: ru.SampleAM, subsample_size: int,
                                seed: int = 42, rep: int = 1000, use_rv: bool = True, use_key: bool = False,
                                replace: bool = False, disjoint: bool = True,
-                               kernel: Kernel = trivial_kernel, **kernelargs) -> np.ndarray[float]:
+                               kernel: Kernel = trivial_kernel,
+                               **kernelargs) -> np.ndarray[float]:
     """
 
     :param replace:
@@ -75,6 +76,47 @@ def subsample_mmd_distribution(sample: ru.SampleAM, subsample_size: int,
 
     return out
 
+
+def subsample_mmdu_squared_distribution(sample: ru.SampleAM, subsample_size: int,
+                               seed: int = 42, rep: int = 1000, use_rv: bool = True, use_key: bool = False,
+                               replace: bool = False, disjoint: bool = True,
+                               kernel: Kernel = trivial_kernel,
+                               **kernelargs) -> np.ndarray[float]:
+    """
+
+    :param replace:
+    :type replace:
+    :param disjoint:
+    :type disjoint:
+    :param sample: Sample to compute MMD from
+    :type sample:
+    :param subsample_size: size of subsamples
+    :type subsample_size:
+    :param seed: to np.random.default_rng()
+    :type seed:
+    :param rep: number of repetitions
+    :type rep:
+    :param use_rv: if True, the kernel must support njit and rv (rank function)
+    :type use_rv:
+    :param kernel:
+    :type kernel:
+    :param use_key: if True, subsample using sample.key (instead of sampling from sample.index). subsample_size must be adjusted accordingly.
+    :type use_key:
+    :param kernelargs:
+    :type kernelargs:
+    :return:
+    :rtype:
+    """
+
+    out = np.empty(rep)
+    for ir in range(rep):
+        sub1, sub2 = sample.get_subsamples_pair(subsample_size=subsample_size, seed=seed + 2 * ir, use_key=use_key,
+                                                replace=replace, disjoint=disjoint)  # so that it returns two SampleAM
+        out[ir] = mmdu_squared(sub1, sub2, use_rv=use_rv, kernel=kernel, **kernelargs)
+
+    return out
+
+
 # Cumulative function of MMD
 def generalizability(mmd_distr: np.ndarray[float], eps: float) -> float:
-    return float(np.mean(mmd_distr <= eps))
+    return np.mean(mmd_distr <= eps)
