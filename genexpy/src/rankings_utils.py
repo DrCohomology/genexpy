@@ -1,22 +1,53 @@
-import math
+"""
+Utility module for handling relations in ranking systems.
+
+This module includes classes for representing rankings as adjacency matrices,
+as well as utilities for converting between rankings and matrices, and for
+managing collections of adjacency matrices. It provides a framework for
+working with rank vectors, adjacency matrices, and their operations.
+"""
+
 import numpy as np
 import pandas as pd
 
 from collections import Counter
 from collections.abc import Collection
-from itertools import permutations
 from tqdm import tqdm
-from typing import AnyStr, Iterable, Tuple
+from typing import AnyStr, Iterable
 
 from . import relation_utils as rlu
 
 
 class AdjacencyMatrix(np.ndarray):
     """
-    Store a ranking as an adjacency matrix.
-    M[i, j] = int(R[i] <= R[j])
+    Class to represent a ranking as an adjacency matrix.
+
+    The adjacency matrix M is constructed such that M[i, j] = int(R[i] <= R[j],
+    where R is the ranking.
+    AdjacencyMatrix objects are hashable and can therefore be used as keys for
+    dictionaries.
+
+    Parameters
+    ----------
+    input_array : np.ndarray
+        A 2D square array representing the adjacency matrix.
+
+    Methods
+    -------
+    zero(na: int) -> AdjacencyMatrix
+        Creates an adjacency matrix for the zero-ranking (everything tied), of size na x na.
+    from_rank_vector(rv: Iterable) -> AdjacencyMatrix
+        Constructs an adjacency matrix from a rank vector.
+    from_bytes(bytestring: bytes, shape: Iterable[int]) -> AdjacencyMatrix
+        Creates an adjacency matrix from a bytestring.
+    tohashable() -> bytes
+        Converts the adjacency matrix to a hashable byte representation.
+    get_ntiers() -> int
+        Returns the number of unique ranks (tiers) in the adjacency matrix.
     """
+
     __slots__ = ()
+
     def __new__(cls, input_array):
         assert len(input_array.shape) == 2, "Wrong number of dimensions."
         assert input_array.shape[0] == input_array.shape[1], "An adjacency matrix is always square."
@@ -25,49 +56,84 @@ class AdjacencyMatrix(np.ndarray):
 
     @classmethod
     def zero(cls, na):
+        """Creates a zeroed adjacency matrix of size na x na."""
         return np.ones((na, na)).view(cls)
 
     @classmethod
-    def from_rank_vector(cls, rv: Iterable):
+    def from_rank_vector(cls, rv: Iterable) -> "AdjacencyMatrix":
         """
-        a rank function maps an alternative into its rank
+        Constructs an adjacency matrix from a rank vector.
+
+        Parameters
+        ----------
+        rv : Iterable
+            A rank vector representing the order of alternatives.
+
+        Returns
+        -------
+        AdjacencyMatrix
+            An adjacency matrix representation of the rank vector.
         """
         return np.array([[ri <= rj for rj in rv] for ri in rv]).astype(int).view(cls)
 
     @classmethod
-    def from_bytes(cls, bytestring: bytes, shape: Iterable[int]):
+    def from_bytes(cls, bytestring: bytes, shape: Iterable[int]) -> "AdjacencyMatrix":
         """
-        bytestring is a string of bytes, but encoded as an object.
-        This is because np.tobytes() will output bytestrings without ending 0's. However, we need the ending 0's for
-            np.frombuffer.
+        Creates an adjacency matrix from a bytestring.
+
+        Parameters
+        ----------
+        bytestring : bytes
+            A bytestring representation of the adjacency matrix.
+        shape : Iterable[int]
+            The shape of the matrix.
+
+        Returns
+        -------
+        AdjacencyMatrix
+            An adjacency matrix constructed from the bytestring.
         """
         return np.frombuffer(bytestring, dtype=np.int8).reshape(shape).view(cls)
 
-    def _list(self):
-        pass
-
-    def tohashable(self):
+    def tohashable(self) -> bytes:
+        """Converts the adjacency matrix to a hashable byte representation."""
         return self.astype(np.int8).tobytes()
 
-    def get_ntiers(self):
+    def get_ntiers(self) -> int:
         """
-        Number of unique ranks == number of tiers.
+        Returns the number of unique ranks (tiers) in the adjacency matrix.
+
+        Returns
+        -------
+        int
+            The number of unique ranks in the adjacency matrix.
         """
         return len(set(np.sum(self, axis=1)))
 
-    def __hash__(self):
+    def __hash__(self) -> int:
+        """Computes the hash of the adjacency matrix based on its byte representation."""
         return hash(self.tohashable())
-
-    # def __iter__(self):
-    #     pass
 
 
 class UniverseAM(np.ndarray):
     """
-    Universe of AdjacencyMatrix objects.
-    It's a np.array storing the binary encodings of adjacency matrices.
-    The dtype of the array is object and not bytes because bytes removes the ending 0's, which messes up
-        the reconstruction of the array using np.frombuffer. See AdjacencyMatrix.from_bytes.
+    Class representing a set of AdjacencyMatrix objects.
+
+    This class stores binary encodings of adjacency matrices in an array-like
+    structure. The dtype is set to object to preserve the integrity of the
+    adjacency matrices' representations.
+
+    Parameters
+    ----------
+    input_iter : Iterable
+        An iterable of AdjacencyMatrix objects or their hashable representations.
+
+    Methods
+    -------
+    to_adjmat_array(shape: Iterable[int]) -> np.ndarray
+        Converts the universe of hashes back to an array of AdjacencyMatrix objects.
+    merge(other: UniverseAM) -> UniverseAM
+        Merges with another UniverseAM instance, retaining unique entries.
     """
 
     def __new__(cls, input_iter: Iterable):
@@ -78,44 +144,134 @@ class UniverseAM(np.ndarray):
                 return input_iter.view(cls)
             raise ValueError("Invalid input to UniverseAM.")
 
-    def to_adjmat_array(self, shape: Iterable[int]):
+    def to_adjmat_array(self, shape: Iterable[int]) -> np.ndarray:
+        """
+        Converts the binary encodings back to an array of AdjacencyMatrix objects.
+
+        Parameters
+        ----------
+        shape : Iterable[int]
+            The shape of the adjacency matrices to be reconstructed.
+
+        Returns
+        -------
+        np.ndarray
+            An array of AdjacencyMatrix objects.
+        """
         return np.array([AdjacencyMatrix.from_bytes(x, shape) for x in self])
 
-    def __contains__(self, bstring):
+    def __contains__(self, bstring: bytes) -> bool:
         """
-        Bytestrings automatically remove ending 0's, leading to problems when trying to use np.frombuffer().
-        Instead, store everything as object.
+        Checks if a bytestring representation is contained in the universe.
+
+        Parameters
+        ----------
+        bstring : bytes
+            The bytestring to check for presence in the universe.
+
+        Returns
+        -------
+        bool
+            True if the bytestring is present, False otherwise.
         """
         return np.any(np.isin(self, bstring))
 
-    def _get_na_nv(self):
-        """Number of alternatives = methods."""
+    def _get_na_nv(self) -> None:
+        """Determines the number of alternatives (methods) and sets attributes."""
         na = np.sqrt(len(self[0]))
         assert na == int(na), "Wrong length"
         self.na = int(na)
         self.nv = len(self)
 
-    def get_na(self):
+    def get_na(self) -> int:
+        """
+        Returns the number of alternatives (methods).
+
+        Returns
+        -------
+        int
+            The number of alternatives in the universe.
+        """
         self._get_na_nv()
         return self.na
 
-    def merge(self, other):
+    def merge(self, other: 'UniverseAM') -> 'UniverseAM':
+        """
+        Merges with another UniverseAM instance, retaining unique entries.
+
+        Parameters
+        ----------
+        other : UniverseAM
+            The other UniverseAM instance to merge with.
+
+        Returns
+        -------
+        UniverseAM
+            A new UniverseAM instance containing unique entries from both.
+        """
         return np.unique(np.append(self, other)).view(UniverseAM)
 
 
 class SampleAM(UniverseAM):
+    """
+    Class representing a sample of adjacency matrices.
+
+    This class extends UniverseAM to include additional methods for working
+    with samples of adjacency matrices, including conversion from rank vectors
+    and storing multiple rank vectors in a rank matrix.
+
+    Attributes
+    ----------
+    rv : np.ndarray, optional
+        The rank vector matrix representation of the sample.
+    ntiers : int, optional
+        The number of tiers per ranking in the sample.
+
+    Methods
+    -------
+    from_rank_vector_dataframe(rv: pd.DataFrame) -> SampleAM
+        Constructs a SampleAM from a DataFrame of rank vectors.
+    from_rank_vector_matrix(rv_matrix: np.ndarray) -> SampleAM
+        Converts a rank function matrix into a SampleAM object.
+    to_rank_vector_matrix() -> np.ndarray
+        Returns a matrix of ranks arranged by method and voter.
+    get_rank_vector_matrix() -> np.ndarray
+        Retrieves or computes the rank vector matrix representation.
+    set_key(key: Collection) -> None
+        Sets a key for entries in the sample.
+    get_subsamples_pair(subsample_size: int, seed: int, use_key: bool = False, replace: bool = False,
+                            disjoint: bool = True) -> tuple[SampleAM, SampleAM]:
+        Draws two subsamples from the sample.
+    get_subsample(subsample_size: int, seed: int, use_key: bool = False, replace: bool = False) -> SampleAM:
+        Draws a single subsample from the sample.
+    get_universe_pmf() -> tuple[SampleAM, np.ndarray]:
+        Returns the universe of unique rankings and their probability mass function (PMF).
+    """
 
     rv = None  # rank vector matrix representation of the sample
     ntiers = None  # number of tiers per ranking in the sample
 
     def __new__(cls, *args, **kwargs):
+        """Creates a new instance of SampleAM."""
         return super().__new__(cls, *args, **kwargs)
 
     @classmethod
-    def from_rank_vector_dataframe(cls, rv: pd.DataFrame):
+    def from_rank_vector_dataframe(cls, rv: pd.DataFrame) -> 'SampleAM':
         """
-        Each row of rv is an alternative.
-        Each column of rv is an experimental condition/ voter.
+        Constructs a SampleAM from a DataFrame of rank vectors.
+
+        Parameters
+        ----------
+        rv : pd.DataFrame
+            DataFrame where each row represents an alternative and each column
+            represents a voter. For instance, in benchmarking, a voter is an
+            experimental condition. every experimental condition produces a
+            ranking of the benchmarked alternatives.
+
+        Returns
+        -------
+        SampleAM
+            A SampleAM instance.
         """
         out = np.empty_like(rv.columns)
         for ic, col in enumerate(rv.columns):
@@ -123,13 +279,21 @@ class SampleAM(UniverseAM):
         return out.view(cls)
 
     @classmethod
-    def from_rank_vector_matrix(cls, rv_matrix):
+    def from_rank_vector_matrix(cls, rv_matrix: np.ndarray) -> 'SampleAM':
         """
-        Convert a rank function matrix into a SampleAM object.
-        Each row of rv_matrix is an alternative.
-        Each column of rv_matrix is an experimental condition/ voter.
+        Converts a rank function matrix into a SampleAM object.
+
+        Parameters
+        ----------
+        rv_matrix : np.ndarray
+            A matrix where each row represents an alternative and each column
+            represents an experimental condition or voter.
+
+        Returns
+        -------
+        SampleAM
+            A SampleAM instance constructed from the rank function matrix.
         """
-        # Initialize an array to store hashable representations of adjacency matrices
         out = np.empty(rv_matrix.shape[1], dtype=object)  # Assuming rv_matrix.shape[1] is the number of columns/voters
 
         # Iterate through each experimental condition/voter
@@ -142,13 +306,18 @@ class SampleAM(UniverseAM):
 
         return out.view(cls)
 
-    def to_rank_vector_matrix(self):
+    def to_rank_vector_matrix(self) -> np.ndarray:
         """
-        Use the Borda count to rank elements, return the ranks arranged in columns.
-        out[i, j] is the rank of alternative (method) i according to voter (experimental condition) j.
-        rv.to_numpy(dtype=int) == self.to_rank_vector_matrix()
-        """
+        Returns a matrix of ranks arranged by method and voter.
 
+        The output matrix contains ranks such that out[i, j] is the rank of
+        alternative (method) i according to voter (experimental condition) j.
+
+        Returns
+        -------
+        np.ndarray
+            A matrix of ranks corresponding to the methods and voters.
+        """
         self._get_na_nv()
 
         out = np.zeros((self.na, self.nv), dtype=int)
@@ -158,38 +327,72 @@ class SampleAM(UniverseAM):
                                    return_inverse=True)[1]
         return out
 
-    def get_rank_vector_matrix(self):
+    def get_rank_vector_matrix(self) -> np.ndarray:
         """
-        Set the rv attribute of self, containing the rank function representation.
+        Retrieves or computes the rank vector matrix representation.
+
+        If the rank vector matrix has not been computed, it computes it and
+        sets the rv attribute.
+
+        Returns
+        -------
+        np.ndarray
+            The rank vector matrix representation of the sample.
         """
         if self.rv is None:
             self.rv = self.to_rank_vector_matrix()
         return self.rv
 
-    def set_key(self, key: Collection):
+    def set_key(self, key: Collection) -> 'SampleAM':
         """
         Set the key of entries. key must have the same length as self.
         Useful for advanced sampling, e.g., sampling datasets.
         Entries of key may not be unique, the idea is that to every key are associated multiple elements of self.
+
+        Parameters
+        ----------
+        key : Collection
+            A collection representing the key for the sample entries.
+
+        Returns
+        -------
+        SampleAM
+            The updated SampleAM instance with the set key.
         """
         assert len(key) == len(self), f"Entered key has length {len(key)}, while it should have length {len(self)}"
         self.key = np.array(key)
         return self
 
     def get_subsamples_pair(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False,
-                            disjoint: bool = True):
+                            disjoint: bool = True) -> tuple['SampleAM', 'SampleAM']:
         """
+        Draws two subsamples from the sample.
 
-        :param seed: passed to the rng
-        :type seed:
-        :param use_key: if True, subsample using sample.key (instead of sampling from sample.index). subsample_size must be adjusted accordingly.
-        :type use_key:
-        :param replace: if True, sample with replacement. Allow repetitions within a subsample
-        :type replace:
-        :param disjoint: if True, the returned subsamples have disjoint keys (if use_key) or indices. Allow repetitions between subsamples.
-        :type disjoint:
-        :return:
-        :rtype:
+        Parameters
+        ----------
+        subsample_size : int
+            The size of each subsample.
+        seed : int
+            The random seed to use for subsampling.
+        use_key : bool, optional
+            If True, subsample using sample.key (instead of sampling from sample.index).
+            subsample_size must be adjusted accordingly. The default is False.
+        replace : bool, optional
+            If True, sample with replacement. Allow repetitions within a subsample.
+            The default is False.
+        disjoint : bool, optional
+            If True, the returned subsamples have disjoint keys (if use_key) or indices.
+            Allow repetitions between subsamples. The default is True.
+
+        Returns
+        -------
+        tuple[SampleAM, SampleAM]
+            A tuple containing the two subsamples.
+
+        Raises
+        ------
+        ValueError
+            If use_key is True, or if the subsample size is too large.
         """
 
         if use_key:
@@ -219,10 +422,32 @@ class SampleAM(UniverseAM):
         return SampleAM(out1), SampleAM(out2)
 
 
-    def get_subsample(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False):
+    def get_subsample(self, subsample_size: int, seed: int, use_key: bool = False, replace: bool = False) -> 'SampleAM':
         """
         Get a subsample of self.
         use_key is deprecated and not supported anymore.
+
+        Parameters
+        ----------
+        subsample_size : int
+            The size of the subsample.
+        seed : int
+            The random seed to use for subsampling.
+        use_key : bool, optional
+            If True, subsample using sample.key (instead of sampling from sample.index).
+            The default is False.
+        replace : bool, optional
+            If True, sample with replacement. The default is False.
+
+        Returns
+        -------
+        SampleAM
+            A subsample of the original sample.
+
+        Raises
+        ------
+        ValueError
+            If use_key is True, or if the subsample size is too large.
         """
 
         if use_key:
@@ -238,11 +463,19 @@ class SampleAM(UniverseAM):
 
         return SampleAM(np.random.default_rng(seed).choice(self, subsample_size, replace=replace))
 
-    def get_universe_pmf(self):
+    def get_universe_pmf(self) -> tuple['SampleAM', np.ndarray]:
+        """
+        Returns the universe of unique rankings and their probability mass function (PMF).
+
+        Returns
+        -------
+        tuple[SampleAM, np.ndarray]
+            A tuple containing the universe of unique rankings and their PMF.
+        """
         counter = Counter(self)
         universe = SampleAM(np.array(list(counter.keys())))
         pmf = np.array(list(counter.values()), dtype=float)
-        return universe, pmf / pmf.sum()
+        return universe, pmf / np.sum(pmf)
 
     def get_ntiers(self):
         """
@@ -284,7 +517,6 @@ class SampleAM(UniverseAM):
 
         return subs1, subs2
 
-
     def _multisample_disjoint_not_replace(self, rep: int, n: int, rng: np.random.Generator):
         """
         Get 'rep' pairs of subsamples of size 'n', sampled with replacement from disjoint subsamples of 'self'.
@@ -302,7 +534,6 @@ class SampleAM(UniverseAM):
         subs2 = np.array([rng.choice(sub, n, replace=False) for sub in shuffled[:, N // 2:]])  # (rep, n)
 
         return subs1, subs2
-
 
     def _multisample_not_disjoint_replace(self, rep: int, n: int, rng: np.random.Generator):
         """
@@ -322,7 +553,6 @@ class SampleAM(UniverseAM):
 
         return subs1, subs2
 
-
     def _multisample_not_disjoint_not_replace(self, rep: int, n: int, rng: np.random.Generator):
         """
         Get 'rep' pairs of samples of size 'n', sampled with replacement from 'self'.
@@ -339,7 +569,6 @@ class SampleAM(UniverseAM):
         subs2 = np.array([rng.choice(sub, n, replace=False) for sub in samples])  # (rep, n)
 
         return MultiSampleAM(subs1), MultiSampleAM(subs2)
-
 
     def get_multisample_pair(self, subsample_size: int, rep: int, seed: int, disjoint: bool = True,
                              replace: bool = False):
@@ -366,30 +595,99 @@ class MultiSampleAM(np.ndarray):
     """
     A sample of samples (a 2d sample).
 
-    rep is the number of samples.
-    na is the number of alternatives.
-    n is the size of the samples.
+    This class represents a collection of samples, where each sample is itself a
+    collection of adjacency matrices. It provides methods for converting between
+    different representations of the multi-sample, such as rank vectors and
+    adjacency matrices.
+
+    Attributes
+    ----------
+    rep : int
+        The number of samples in the multi-sample.
+    na : int
+        The number of alternatives in each sample.
+    n : int
+        The size of each sample.
+
+    Methods
+    -------
+    to_rank_vectors() -> np.ndarray
+        Converts the multi-sample to a representation of rank vectors.
+    to_adjacency_matrices(na: int) -> np.ndarray
+        Converts the multi-sample to a representation of adjacency matrices.
     """
 
     def __new__(cls, input_iter: Iterable):
+        """Creates a new instance of MultiSampleAM."""
         return np.asarray(input_iter).view(cls)
 
-    def to_rank_vectors(self):
+    def to_rank_vectors(self) -> np.ndarray:
+        """
+        Converts the multi-sample to a representation of rank vectors.
+
+        Returns
+        -------
+        np.ndarray
+            A 3D array of shape (rep, na, n) representing the rank vectors,
+            where rep is the number of samples, na is the number of alternatives,
+            and n is the size of each sample.
+        """
         return np.array([SampleAM(sample).to_rank_vector_matrix() for sample in self])      # (rep, na, n)
 
-    def to_adjacency_matrices(self, na: int):
+    def to_adjacency_matrices(self, na: int) -> np.ndarray:
+        """
+        Converts the multi-sample to a representation of adjacency matrices.
+
+        Parameters
+        ----------
+        na : int
+            The number of alternatives in each adjacency matrix.
+
+        Returns
+        -------
+        np.ndarray
+            A 4D array of shape (rep, n, na, na) representing the adjacency matrices,
+            where rep is the number of samples, n is the size of each sample,
+            and na is the number of alternatives.
+        """
         return np.array([[AdjacencyMatrix.from_bytes(r, shape=(na, na)) for r in sample] for sample in self])    # (rep, n, na, na)
-
-
-
 
 
 def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, lower_is_better=True,
                          impute_missing=True, verbose=False) -> pd.DataFrame:
     """
-        Compute a ranking of 'alternatives' for each combination of 'factors', according to 'target'.
-        Set lower_is_better = False if 'target is a score, to True if it is a loss or a rank.
-        If impute_missing == True, the empty ranks are imputed.
+    Computes a ranking of 'alternatives' for each combination of 'factors', according to 'target'.
+
+    This function groups the DataFrame by the specified factors and then ranks the
+    alternatives within each group based on the target column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame containing the data.
+    factors : Iterable
+        An iterable of column names to group the DataFrame by.
+    alternatives : AnyStr
+        The name of the column containing the alternatives to be ranked.
+    target : AnyStr
+        The name of the column containing the values to rank by.
+    lower_is_better : bool, optional
+        Whether lower values in the target column are considered better.
+        The default is True.
+    impute_missing : bool, optional
+        Whether to impute missing values in the rankings. The default is True.
+    verbose : bool, optional
+        Whether to display a progress bar. The default is False.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the rankings of alternatives for each combination of factors.
+
+    Raises
+    ------
+    ValueError
+        If any of the factors, alternatives, or target columns are not present in the DataFrame.
     """
 
     if not set(factors).issubset(df.columns):
@@ -409,37 +707,3 @@ def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyS
 
     return pd.DataFrame.from_dict(rankings, orient="index").T  # for whatever reason, this seems to be more stable
 
-
-def universe_untied_rankings(na: int) -> UniverseAM[AdjacencyMatrix]:
-    """
-    :param na: number of alternatives, i.e., items ranked
-    """
-    # all possible untied rank functions
-    return UniverseAM(AdjacencyMatrix.from_rank_vector(rv) for rv in permutations(range(na)))
-
-
-# Function for generating Rankings without ties
-def generate_rankings_without_ties(na: int):
-    total_orders = []
-    elements_list = list(range(1, na + 1))
-
-    for perm in permutations(elements_list):
-        matrix_size = na
-        adj_matrix = np.zeros((matrix_size, matrix_size), dtype=int)
-
-        # Map elements to indices
-        element_to_index = {element: idx for idx, element in enumerate(elements_list)}
-
-        # Fill the matrix based on the permutation
-        for i in range(matrix_size):
-            for j in range(i, matrix_size):
-                adj_matrix[element_to_index[perm[i]], element_to_index[perm[j]]] = 1
-
-        # Add reflexivity
-        np.fill_diagonal(adj_matrix, 1)
-
-        total_orders.append(adj_matrix)
-
-    assert (math.factorial(na) == len(total_orders))
-
-    return total_orders

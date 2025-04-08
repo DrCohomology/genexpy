@@ -128,10 +128,8 @@ for repnum in tqdm(range(50), desc="repnum"):
 
             # Sample the distribution of MMD for varying sizes
             mmds = {
-                n: mmd.subsample_mmd_distribution(
-                    rankings, subsample_size=n, rep=100, use_rv=True, use_key=False,
-                    seed=SEED, disjoint=DISJOINT, replace=REPLACE, kernel=kernel, **kernelargs
-                )
+                n: mmd.mmd_distribution(rankings, subsample_size=n, seed=SEED, rep=100, use_rv=True, use_key=False,
+                                        replace=REPLACE, disjoint=DISJOINT, kernel=kernel, **kernelargs)
                 for n in range(2, min(30, N // 2 + 1))
             }
 

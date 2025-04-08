@@ -63,22 +63,6 @@ def generalizability_lowerbound(eps: float, n: int, kbar: float, v: float) -> fl
     return 1 - np.exp(- 9*n / (16*kbar) * (v - 2/3*np.sqrt(kbar)*eps - np.sqrt(v)*np.sqrt(v-4/3*np.sqrt(kbar)*eps)))
 
 
-# def mmd_lowerbound(eps: float, n: int, kbar: float):
-#     """
-#     Calculate the lower bound probability for the absolute difference between
-#     empirical MMD and true MMD to be within specified bounds.
-#
-#     Parameters:
-#     n (int): Sample size
-#     K (float): Upper bound for the kernel function
-#     epsilon (float): Tolerance level for deviation
-#
-#     Returns:
-#     float: Lower bound for the difference between MMD and empirical MMD
-#     """
-#     return 1 - 2 * np.exp(-(eps - 4*(kbar/n)**0.5)**2 * n ** 2 / (2 * kbar * (2 * n)))
-
-
 def mmd_lowerbound(eps: float, n: int, kbar: float):
     """
     Calculate the lower bound probability for the absolute difference between
