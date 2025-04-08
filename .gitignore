@@ -7,7 +7,7 @@
 /demos/Synthetic data/outputs
 /demos/Synthetic data/better_vectorized_outputs
 /test/outputs
-/test
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
