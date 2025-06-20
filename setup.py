@@ -17,5 +17,5 @@ setup(
     author_email='anonym@anonym.com',
     url='anonym.com',
     install_requires=read_requirements(),
-    python_requires='==3.11.8',
+    python_requires='>=3.11.8',
 )
