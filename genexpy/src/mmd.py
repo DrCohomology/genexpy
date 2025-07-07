@@ -1,8 +1,11 @@
 import numpy as np
 
+from . import kernels_classes as kcu
 from . import rankings_utils as ru
 from .kernels import square_gram_matrix, gram_matrix, trivial_kernel, Kernel
 from .kernels_vectorized import AVAILABLE_VECTORIZED_KERNELS
+
+
 
 def mmdb(sample1: ru.SampleAM, sample2: ru.SampleAM, use_rv: bool = True,
          kernel: Kernel = trivial_kernel, **kernelargs) -> float:
@@ -182,14 +185,6 @@ def mmd_distribution_vectorized(sample: ru.SampleAM, n: int, rep: int, kernel_na
 
     In this function, we estimate the MMD by drawing two subsamples from the given sample
     and computing the difference in their means in the RKHS.
-
-    Examples
-    --------
-    >>> from . import ranking_utils as ru
-    >>> from kernels_vectorized import AVAILABLE_VECTORIZED_KERNELS
-    >>> sample = ru.SampleAM(np.array([[[0, 1], [1, 0]], [[1, 0], [0, 1]]]))
-    >>> mmd_distribution_vectorized(sample, n=2,rep=5,kernel_name="mallows", nu=1)
-    array([0.12345678, 0.98765432, 0.23456789, 0.56789012, 0.78901234])
     """
     s1, s2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed, disjoint=disjoint, replace=replace)
 
@@ -220,3 +215,33 @@ def mmd_distribution_vectorized(sample: ru.SampleAM, n: int, rep: int, kernel_na
 
     return np.sqrt(np.abs(np.mean(Kxx, axis=(1, 2)) + np.mean(Kyy, axis=(1, 2)) - 2 * np.mean(Kxy, axis=(1, 2))))
 
+
+def mmd_distribution_vectorized_class(sample: ru.SampleAM, n: int, rep: int, kernel_obj: kcu.Kernel,
+                                     seed: int = 0, disjoint: bool = True, replace: bool = False) -> np.ndarray[float]:
+
+
+    s1, s2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed, disjoint=disjoint, replace=replace)
+
+    s1 = ru.MultiSampleAM(s1)
+    s2 = ru.MultiSampleAM(s2)
+
+    na = int(np.sqrt(len(s1[0,0])))  # number of alternatives
+
+    match kernel_obj.vectorized_input_format:
+        case "adjmat":
+            x1 = s1.to_adjacency_matrices(na=na)
+            x2 = s2.to_adjacency_matrices(na=na)
+        case "vector":
+            x1 = s1.to_rank_vectors()
+            x2 = s2.to_rank_vectors()
+        case _:
+            raise ValueError(f"Unsupported input format for vectorized kernel: {kernel_obj.vectorized_input_format}")
+
+    Kxx = kernel_obj.gram_matrix(x1, x1)
+    Kyy = kernel_obj.gram_matrix(x2, x2)
+    Kxy = kernel_obj.gram_matrix(x1, x2)
+
+    return np.sqrt(np.abs(np.mean(Kxx, axis=(1, 2)) + np.mean(Kyy, axis=(1, 2)) - 2 * np.mean(Kxy, axis=(1, 2))))
+
+def generalizability(mmd_distr: np.ndarray[float], eps: float) -> float:
+    return np.mean(mmd_distr <= eps)
