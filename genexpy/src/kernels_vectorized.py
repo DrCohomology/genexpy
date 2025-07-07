@@ -137,7 +137,7 @@ def borda_gram(rv1: RankVector, rv2: RankVector, idx: int, nu: Union[float, Lite
 
     if nu == "auto":
         na = rv1.shape[0]
-        nu = 2 / (na*(na-1))
+        nu = 1 / na
 
     d1 = np.sum(rv1 >= rv1[idx], axis=0)  # dominated
     d2 = np.sum(rv2 >= rv2[idx], axis=0)
@@ -164,7 +164,7 @@ def jaccard_gram(rv1: RankVector, rv2: RankVector, k: int):
 
     Returns
     -------
-    ndarray
+    ndarray99
         A tensor of shape (n, n) representing the Gram matrix of the Jaccard kernel between the two sets of
         rankings.
 
