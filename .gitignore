@@ -6,8 +6,11 @@
 /demos/Synthetic data/better_outputs
 /demos/Synthetic data/outputs
 /demos/Synthetic data/better_vectorized_outputs
+/demos/template/outputs
 /test/outputs
 /test
+/.idea
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
