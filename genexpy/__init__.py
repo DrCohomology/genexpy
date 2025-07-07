@@ -1,4 +1,5 @@
 from .src import kernels
+from .src import kernels_classes
 from .src import kernels_vectorized
 from .src import lower_bounds
 from .src import mmd
