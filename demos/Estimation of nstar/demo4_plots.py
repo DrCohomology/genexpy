@@ -105,7 +105,7 @@ ylim = 1
 
 # pretty names
 pretty_columns = {"alpha": r"$\alpha^*$", "eps": r"$\varepsilon^*$", "nstar": r"$n^*$", "delta": r"$\delta^*$", "N": r"$N$",
-      "nstar_rel_error": "$(n^*_N-n^*) / n^*$", "nstar_ratio_error": "$n^*_N / n^*$"}  # columns
+      "nstar_rel_error": "$(\hat{n}^*_N-n^*) / n^*$", "nstar_ratio_error": "$\hat{n}^*_N / n^*$"}  # columns
 pretty_kernels = {"borda_kernel_nu_auto": r"$\kappa_b^{0, 1/n}$", "mallows_kernel_nu_auto": r"$\kappa_m^{1/\binom{n}{2}}$",
       "jaccard_kernel_k_1": r"$\kappa_j^{1}$"}  # kernels
 pretty_distrs = {
@@ -184,7 +184,7 @@ plt.tight_layout(pad=1)
 plt.subplots_adjust(top=0.9)
 plt.figlegend(handles, labels, bbox_to_anchor=(0, 0.9 + 0.02, 1, 0.2),
               loc="lower center", mode=None, borderaxespad=1, ncol=3, frameon=False)
-plt.savefig(FIGURES_DIR / f"nstar_{error_toplot}_synthetic.pdf")
+plt.savefig(FIGURES_DIR / f"synthetic_{error_toplot}.pdf")
 
 #%% 1b. Plotting everything
 
@@ -224,7 +224,7 @@ ax.grid(axis="y", zorder=-1, alpha=0.3)
 ax.legend(*ax.get_legend_handles_labels()).get_frame().set_edgecolor("w")
 sns.despine()
 plt.tight_layout(pad=0.5)
-plt.savefig(FIGURES_DIR / f"nstar_{error_toplot}_complete.pdf")
+plt.savefig(FIGURES_DIR / f"synthetic_{error_toplot}_complete.pdf")
 
 
 #%% 2. Get percentage of closeness

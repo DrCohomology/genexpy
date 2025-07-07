@@ -67,7 +67,7 @@ for kernel_config in config['kernels']:
                 KERNELS[kernel_name] = (kernel_func, params, eps, delta)
     else:
         print(f"Kernel function '{kernel_config['kernel']}' not found in module 'kernels'.")
-
+#%%
 def create_quantiles_dataframe(mmds):
     qs = {n: np.log(np.quantile(mmde, ALPHA)) for n, mmde in mmds.items()}
     dfq = pd.DataFrame(list(qs.items()), columns=['n', 'log(eps)'])
@@ -255,7 +255,7 @@ mpl.rcParams['text.latex.preamble'] = r"""
 mpl.rc('font', family='Times New Roman')
 
 # pretty names
-pc = {"alpha": r"$\alpha^*$", "eps": r"$\varepsilon^*$", "nstar": r"$n^*$", "delta": r"$\delta^*$", "N": r"$N$", "nstar_rel_error": r"$\frac{n^*-n^*_N}{n^*}$"}  # columns
+pc = {"alpha": r"$\alpha^*$", "eps": r"$\varepsilon^*$", "nstar": r"$n^*$", "delta": r"$\delta^*$", "N": r"$N$", "nstar_rel_error": r"$\frac{n^*-\hat{n}^*_N}{n^*}$"}  # columns
 pk = {"borda_kernel_idx_OHE": r"$\kappa_b^{\text{OHE}, 1/n}$", "mallows_kernel_nu_auto": r"$\kappa_m^{1/\binom{n}{2}}$", "jaccard_kernel_k_1": r"$\kappa_j^{1}$"}  # kernels
 pk.update({"jaccard_kernel_k_1": r"$g_2$","mallows_kernel_nu_auto": r"$g_3$"})
 
