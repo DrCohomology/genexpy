@@ -27,16 +27,37 @@ from tqdm.auto import tqdm
 
 from genexpy import utils as u
 from genexpy import rankings_utils as ru
-
-from importlib import reload
-
-reload(u)
-reload(ru)
+from genexpy import kernels as ku
 
 pm = u.ProjectManager()
 pm.move_to_script_directory()
 pm.load_config_file("config.yaml")
 pm.create_project_directories()
+
+
+rv1 = np.array([[0, 2, 2, 3, 0],
+                [2, 1, 1, 0, 2],
+                [2, 1, 1, 2, 2],
+                [1, 0, 0, 1, 1]])
+
+rv2 = np.array([[3, 3, 0, 2, 3],
+                [0, 0, 2, 1, 0],
+                [2, 2, 2, 1, 2],
+                [1, 1, 1, 0, 1]])
+
+# s1 = ru.SampleAM.from_rank_vector_matrix(rv1)
+# s2 = ru.SampleAM.from_rank_vector_matrix(rv2)
+
+k = ku.JaccardKernel(k=1)
+
+rv = np.array([[0, 2, 2, 1],
+               [2, 1, 1, 0],
+               [3, 0, 2, 1]]).T
+
+
+#%%%
+
+
 
 
 out = []

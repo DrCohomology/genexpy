@@ -93,7 +93,6 @@ class FunctionDefaultDict(defaultdict):
         """
         return self.func(key)
 
-
 class ProbabilityDistribution(ABC):
     """
     Abstract base class for probability distributions over rankings.
@@ -151,7 +150,7 @@ class ProbabilityDistribution(ABC):
             if len(self.universe) == 0:
                 raise ValueError("The input list is empty.")
 
-        self.pmf = defaultdict(lambda: 0)  # probability mass function, used by some distributions
+        self.pmf = defaultdict(lambda: 0)  # TODO: refactor as pd.Series (better for multisamples)
         self.ties = ties
         self.seed = seed
         self.rng = np.random.default_rng(seed)
@@ -257,10 +256,25 @@ class ProbabilityDistribution(ABC):
         self.sample_time = time.time() - start_time
         return out
 
+    def multisample(self, n: int, nm: int, **kwargs) -> ru.MultiSampleAM:
+        """
+        Samples 'm' samples of 'n' rankings from the distribution.
+        Parameters
+        ----------
+        n : size of the samples
+        nm : number of samples
+        kwargs :
+
+        Returns
+        -------
+
+        """
+
+        return ru.MultiSampleAM([self.sample(n, **kwargs) for _ in range(nm)])
+
     def __str__(self):
         """Returns a string representation of the distribution."""
         return f"{self.name}(na={self.na}, ties={self.ties})"
-
 
 class UniformDistribution(ProbabilityDistribution):
     """
@@ -342,8 +356,6 @@ class UniformDistribution(ProbabilityDistribution):
         """
         return ru.SampleAM.from_rank_vector_matrix(
             self.rng.permuted(np.tile(np.arange(self.na), n).reshape(n, self.na), axis=1).T)
-
-
 
 class DegenerateDistribution(ProbabilityDistribution):
     """
@@ -447,8 +459,6 @@ class MDegenerateDistribution(ProbabilityDistribution):
             elements = self._uniform.sample(self.m)
             return np.tile(elements, n // self.m)
 
-
-
 class SpikeDistribution(ProbabilityDistribution):
     """
     Sample rankings with probability proportional to their kernel to a given center.
@@ -487,7 +497,7 @@ class SpikeDistribution(ProbabilityDistribution):
         Samples rankings from the Spike distribution without ties.
     """
 
-    def __init__(self, *args, center: ru.AdjacencyMatrix = None, kernel: ku.Kernel = ku.mallows_kernel,
+    def __init__(self, *args, center: ru.AdjacencyMatrix = None, kernel: ku.Kernel = ku.MallowsKernel,
                  kernelargs: dict = None, uniform_size_sample: Union[Literal["auto", "n"], int] = "n", **kwargs):
         super().__init__(*args, **kwargs)
         self._check_valid_element(center)
@@ -590,7 +600,6 @@ class SpikeDistribution(ProbabilityDistribution):
         # return ru.SampleAM(self.rng.choice(unif_sample, size=n, replace=True, p=pmf/pmf.sum()))
         return self._sample_from_na(n, **kwargs)
 
-
 class PMFDistribution(ProbabilityDistribution):
     """
     Probability distribution defined by a custom probability mass function (PMF).
@@ -633,13 +642,14 @@ class PMFDistribution(ProbabilityDistribution):
     """
 
 
-    def __init__(self, pmf: np.ndarray, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, pmf: np.ndarray, universe: ru.SampleAM, *args, **kwargs):
+        super().__init__(universe, *args, **kwargs)
         self.pmf = pmf
         self.name = "PMF"
+        self.universe = universe
 
-        if self.universe is None:
-            raise ValueError("Universe must be specified for a PMFDistribution.")
+        # if self.universe is None:
+        #     raise ValueError("Universe must be specified for a PMFDistribution.")
         if len(self.universe) != len(self.pmf):
             raise ValueError("The length of universe and pmf must coincide.")
 

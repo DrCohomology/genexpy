@@ -1,15 +1,17 @@
 # Output directory
-/demos/BIG-bench/outputs
-/demos/Categorical encoders/outputs
-/demos/Estimation of nstar/outputs_redone
-/demos/Categorical encoders (extended Jaccard)/outputs
-/demos/Synthetic data/better_outputs
+/demos/BIG-bench
+/demos/Categorical encoders
+/demos/Estimation of nstar
+/demos/Categorical encoders (extended Jaccard)
+/demos/Synthetic data
 /demos/Synthetic data/outputs
 /demos/Synthetic data/better_vectorized_outputs
 /demos/template/outputs
 /test/outputs
 /test
 /.idea
+/demos/Template/main_legacy.py
+/demos/Template/retreat2025_presentation.py
 
 
 # Byte-compiled / optimized / DLL files
@@ -253,3 +255,4 @@ fabric.properties
 # custom
 # /test
 .idea
+/demos/Synthetic data/

@@ -548,8 +548,8 @@ class SampleAM(UniverseAM):
         N = len(self)
         samples = np.broadcast_to(np.expand_dims(self, axis=0), (rep, N))  # (rep, N)
         tmp = np.array([rng.choice(sub, 2 * n, replace=True) for sub in samples])  # (rep, 2*n)
-        subs1 = tmp[:, :N // 2]
-        subs2 = tmp[:, N // 2:]
+        subs1 = tmp[:, :n]
+        subs2 = tmp[:, n:]
 
         return subs1, subs2
 
@@ -652,6 +652,31 @@ class MultiSampleAM(np.ndarray):
         """
         return np.array([[AdjacencyMatrix.from_bytes(r, shape=(na, na)) for r in sample] for sample in self])    # (rep, n, na, na)
 
+    def get_pmfs_df(self, universe: UniverseAM = None) -> pd.DataFrame:
+        """
+        Create a dataframe. Index: rankings. Columns: samples in 'ms'.
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        a pd.DataFrame
+
+        """
+        # If universe is None, it is ignored. If it is not, the index of the output df is guaranteed to have
+        # `universe` as a subset
+        tmps = [pd.Series(index=universe, name="universe_tmp")]
+        for i, s in enumerate(self):
+            universe_lcl, pmf = SampleAM(s).get_universe_pmf()
+            if universe is not None and not set(universe_lcl).issubset(universe):
+                raise ValueError("There are rankings in the sample that are not contained in self.universe (which is "
+                                 "not None)")
+
+            tmps.append(pd.Series(pmf, index=universe_lcl))
+
+        return pd.concat(tmps, axis=1, ignore_index=False).drop(columns="universe_tmp").fillna(0)
+
 
 def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr, target: AnyStr, lower_is_better=True,
                          impute_missing=True, verbose=False) -> pd.DataFrame:
@@ -697,6 +722,8 @@ def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyS
     if target not in df.columns:
         raise ValueError("target must be a column of df.")
 
+    df = df.reset_index(drop=True)
+
     rankings = {}
     iterator = df.groupby(factors).groups.items()
     if verbose:
@@ -705,5 +732,10 @@ def get_rankings_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyS
         score = df.iloc[indices].set_index(alternatives)[target]
         rankings[group] = rlu.score2rv(score, lower_is_better=lower_is_better, impute_missing=impute_missing)
 
-    return pd.DataFrame.from_dict(rankings, orient="index").T  # for whatever reason, this seems to be more stable
+    out = pd.DataFrame.from_dict(rankings, orient="index").T  # for whatever reason, this seems to be more stable
+
+    if impute_missing:
+        out = out.fillna(out.max())
+
+    return out
 
