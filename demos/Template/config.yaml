@@ -3,6 +3,13 @@ paths:
   outputs_dir: outputs
   figures_dir: figures
 
+# Parameters for the ProjectManager
+project_parameters:
+  load_precomputed_mmd: False
+  dump_results: True
+  delete_existing_results: False
+  verbose: True
+
 # Parameters for the generalizability study:
   # alpha specifies the desired level of generalizability;
   # delta is used to set a condition on the minimum desired value of the kernel
@@ -27,7 +34,7 @@ parameters:
     - 0.2
     - 0.3
   seed: 37
-  rep: 100
+  rep: 200
 
 # The following entries define the data and how to interpret it.
     # the dataset is stored in dataset_path. Its primary key consists of the experimental factors + alternatives.
@@ -42,18 +49,23 @@ parameters:
 
   # target: the name of the column, the alternatives are ranked according to it.
   # alternatives the name of the column listed the compared methods
+  # target_is_error: set to False if the target column contains a score (e.g., as output of sklearn.metrics.accuracy_score),
+    # to True if it contains an error (e.g., as output of sklearn.metrics.mean_squared_error). If the results contain multiple metrics,
+    # they ALL HAVE TO BE EITHER SCORES OR ERRORS
 data:
   dataset_path: data/encoders_results.parquet
+  alternatives_col_name: "encoder"
   experimental_factors_name_lvl:
     dataset: null
     model: "_all"
-    tuning: "no"
+    tuning: "_all"
     scoring: "_all"
   target_col_name: "cv_score"
-  alternatives_col_name: "encoder"
+  target_is_error: False
 
 # Parameteres controlling the iid sampling from valid experimental conditions, to approximate the
 # true distribution of results and compute the MMD between pairs of studies.
+# disjoint and replace are ignored if the method passed to pm.generalizability_analysis is "approximation"
   # sample_size: increment in sample size N
   # disjoint: if True, compute MMD on two disjoint samples of experimental conditions
   # replace: if True, compute MMD on two samples of experimental conditions, with replacement
@@ -63,18 +75,33 @@ data:
   # disjoint = false, replace = false: optimistic setting, MMD is biased downwardly and generalizability upwardly
   # disjoint = false, replace = true: --- setting, without clear biases
 sampling:
-  sample_size: 30
+  sample_size: 10
   disjoint: true
   replace: false
 
+
+# How the predicted number of necessary experiments nstar is computed. The estimation is always made by estimating the
+# ICDF (inverse CDF, or quantile function) of the MMD. The estimation methods are used by a RankingKernel object.
+#  As such, the implementation of the kernel should have hte appropriate methods. More details are in kernels.py.
+#  Possible values:
+  # approximation (almost instant): based on a close-formula approximating the ICDF of the MMD
+  # naive (VERY slow, deprecated if other methods are available): get a pair of samples of results, compute their MMD, estimate the ICDF of the MMD.
+  # vectorized (slow): get multiple pairs of samples of results and compute their MMD in one function call.
+  # embedding (fast, recommended): use an equivalent definition of the MMD to speed up the estimation
+nstar_estimation_methods:
+  rankings:
+    - "approximation"
+    - "embedding"
+  vectors:
+    - "naive"
+    - "approximation"
+
 # Each kernel corresponds to a goal of the study.
-  # kernel: the name of a Kernel object in kernels.py, within double quotation marks
+  # kernel: the name of a subclass of genexpy.kernels.base.Kernel
   # params: the parameters of a kernel as defined in kernels.py. A list of values
-  # delta: float in [0, 1], defines the similarity threshold between rankings
 kernels:
 
-  - kernel: "borda_kernel"
-    class_impl: "kernels_classes.BordaKernel"
+  - name: "BordaKernel"
     params:
       alternative: # alternative of interest
         - "OHE"
@@ -82,14 +109,17 @@ kernels:
       nu:
         - "auto"                  # kernel bandwidth, auto = 1 /  na
 
-  - kernel: "jaccard_kernel"
-    class_impl: "kernels_classes.JaccardKernel"
+  - name: "JaccardKernel"
     params:
       k:                          # number of top tiers considered
         - 1
 
-  - kernel: "mallows_kernel"
-    class_impl: "kernels_classes.MallowsKernel"
+  - name: "MallowsKernel"
     params:
       nu:                         # kernel bandwidth, auto = 1 /  binom(na, 2)
         - "auto"
+
+  - name: "RBFKernel"
+    params:
+      gamma:
+        - "auto"                  # kernel bandwidth, auto = 1 / na

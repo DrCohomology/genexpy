@@ -1,29 +1,40 @@
 # Paths for the outputs.
 paths:
-  output_dir: outputs
+  outputs_dir: outputs
   figures_dir: figures
 
-# Output format for the intermediate plots, stored in subdirectories of `outputs` (not featured in the paper).
-# Any non-null value significantly slows down the computation.
-# Accepted values:
-  # null (no figures)
-  # pdf
-  # png
-  # gif (png & gif)
-  # all (pdf, png & gif)
-format:
-  figure_output: null
+# Parameters for the ProjectManager
+project_parameters:
+  load_precomputed_mmd: False
+  dump_results: True
+  delete_existing_results: False
+  verbose: True
 
 # Parameters for the generalizability study:
   # alpha specifies the desired level of generalizability;
-  # lr_confidence is the width of a confidence interval for the linear regression;
+  # delta is used to set a condition on the minimum desired value of the kernel
+    # borda: max difference in relative position of 'idx' for two rankings to be similar
+    # jaccard: minimum intersection over union between top-k tiers for two rankings to be similar
+    # mallows: max fraction of discordant pairs for two rankings to be similar
   # seed is hte random seed passed to np.random.default_rng
+  # rep is the number of pairs of subsamples used to estimate the distribution of the MMD
 # The other defining parameter for a generalizability analysis, delta, is defined for every kernel differently,
 # as it has different interpretations (see below).
 parameters:
-  alpha: 0.
-  lr_confidence: 0.9
+  alpha:
+    - 0.7
+    - 0.8
+    - 0.9
+    - 0.95
+    - 0.99
+  delta:
+    - 0.01
+    - 0.05
+    - 0.1
+    - 0.2
+    - 0.3
   seed: 37
+  rep: 200
 
 # The following entries define the data and how to interpret it.
     # the dataset is stored in dataset_path. Its primary key consists of the experimental factors + alternatives.
@@ -33,22 +44,27 @@ parameters:
       # factor_name: level_name
     # design factors: an independent generalizability analysis for every combination of levels of design factors
       # factor_name: "_all"
-    # allowed-to-vary-factor: the factor for which we want to draw generalizable conclusions.
+    # generalizability the factor for which we want to draw generalizable conclusions.
       # factor_name: null
 
   # target: the name of the column, the alternatives are ranked according to it.
   # alternatives the name of the column listed the compared methods
+  # target_is_error: set to False if the target column contains a score (e.g., as output of sklearn.metrics.accuracy_score),
+    # to True if it contains an error (e.g., as output of sklearn.metrics.mean_squared_error). If the results contain multiple metrics,
+    # they ALL HAVE TO BE EITHER SCORES OR ERRORS
 data:
   dataset_path: data/bigbench_results.parquet
-  experimental_factors:
+  alternatives_col_name: "model_family_model_name"
+  experimental_factors_name_lvl:
     subtask_description: null
     task_name: "_all"
     number_of_shots: "_all"
-  target: "score_value"
-  alternatives: "model_family_model_name"
+  target_col_name: "score_value"
+  target_is_error: False
 
 # Parameteres controlling the iid sampling from valid experimental conditions, to approximate the
 # true distribution of results and compute the MMD between pairs of studies.
+# disjoint and replace are ignored if the method passed to pm.generalizability_analysis is "approximation"
   # sample_size: increment in sample size N
   # disjoint: if True, compute MMD on two disjoint samples of experimental conditions
   # replace: if True, compute MMD on two samples of experimental conditions, with replacement
@@ -62,22 +78,46 @@ sampling:
   disjoint: true
   replace: false
 
-# Each kernel corresponds to a goal of the study.
-  # kernel: the name of a Kernel object in kernels.py, within double quotation marks
-  # params: the parameters of a kernel as defined in kernels.py. Either a value or a list of values
-  # delta: float in [0, 1], defines the similarity threshold between rankings
-kernels:
-  - kernel: "mallows_kernel"
-    params:
-      nu: "auto"                  # kernel bandwidth, auto = 1 /  binom(na, 2)
-    delta: 0.05                   # max fraction of discordant pairs for two rankings to be similar
 
-#  - kernel: "jaccard_kernel"
-#    params:
-#      k: 1                        # number of top tiers considered
-#    delta: 0.05                   # minimum intersection over union between top-k tiers for two rankings to be similar
-#
-#  - kernel: "borda_kernel"
-#    params:
-#      alternative: "GPT GPT-3 Small"                 # alternative of interest
-#    delta: 0.05                   # max difference in relative position of 'idx' for two rankings to be similar
+# How the predicted number of necessary experiments nstar is computed. The estimation is always made by estimating the
+# ICDF (inverse CDF, or quantile function) of the MMD. The estimation methods are used by a RankingKernel object.
+#  As such, the implementation of the kernel should have hte appropriate methods. More details are in kernels.py.
+#  Possible values:
+  # approximation (almost instant): based on a close-formula approximating the ICDF of the MMD
+  # naive (VERY slow, deprecated if other methods are available): get a pair of samples of results, compute their MMD, estimate the ICDF of the MMD.
+  # vectorized (slow): get multiple pairs of samples of results and compute their MMD in one function call.
+  # embedding (fast, recommended): use an equivalent definition of the MMD to speed up the estimation
+nstar_estimation_methods:
+  rankings:
+    - "approximation"
+    - "embedding"
+  vectors:
+    - "naive"
+    - "approximation"
+
+# Each kernel corresponds to a goal of the study.
+  # kernel: the name of a subclass of genexpy.kernels.base.Kernel
+  # params: the parameters of a kernel as defined in kernels.py. A list of values
+kernels:
+
+  - name: "BordaKernel"
+    params:
+      alternative: # alternative of interest
+        - "GPT GPT-3 Small"
+      nu:
+        - "auto"                  # kernel bandwidth, auto = 1 /  na
+
+  - name: "JaccardKernel"
+    params:
+      k:                          # number of top tiers considered
+        - 1
+
+  - name: "MallowsKernel"
+    params:
+      nu:                         # kernel bandwidth, auto = 1 /  binom(na, 2)
+        - "auto"
+
+  - name: "RBFKernel"
+    params:
+      gamma:
+        - "auto"                  # kernel bandwidth, auto = 1 / na
