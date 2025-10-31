@@ -38,6 +38,7 @@ parameters:
 
 # The following entries define the data and how to interpret it.
     # the dataset is stored in dataset_path. Its primary key consists of the experimental factors + alternatives.
+    # All columns of the dataset whose name is not entered here will be ignored in the analysis.
 
   # An experimental factor is a variable that influences the outcome of an experiment. We distinguish three kinds:
     # held-constant factors: fixed to a specified level.

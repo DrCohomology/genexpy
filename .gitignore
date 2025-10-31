@@ -256,5 +256,5 @@ fabric.properties
 # /test
 .idea
 /demos/Synthetic data/
-/demos/Template_test_new_features/
+/deprecated/Template_test_new_features/
 /deprecated/

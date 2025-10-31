@@ -41,10 +41,11 @@ class ProjectManager:
 
     df_format = "parquet"
 
-    def __init__(self, config_yaml_path: Union[str, Path], is_project_manager: bool = True):
+    def __init__(self, config_yaml_path: Union[str, Path], demo_dir: Union[str, Path], is_project_manager: bool = True):
         # --- Configuration and flags ---
         self.is_project_manager = is_project_manager
-        self.config_yaml_path = Path(config_yaml_path)
+        self.demo_dir = Path(demo_dir)
+        self.config_yaml_path = self.demo_dir / config_yaml_path
         self.load_precomputed_mmd = None
         self.dump_results = None
         self.delete_existing_results = None
@@ -61,6 +62,8 @@ class ProjectManager:
         self.df_nstar = None
         self.factors_dict = None
         self.results = None
+        self.results_matrix = None
+        self.results_rankings = None
         self.kernels = None
 
         # --- Factors ---
@@ -94,20 +97,12 @@ class ProjectManager:
         self.flag_generalizability_factor = None
 
         # --- Initialization steps ---
-        self._move_to_script_directory()
         self._load_config_file()
         if self.is_project_manager:
             self._create_project_directories()
 
         if self.load_precomputed_mmd:
             self._load_precomputed_mmd_df()
-
-    @staticmethod
-    def _move_to_script_directory():
-        try:
-            os.chdir("demos/Template")
-        except FileNotFoundError:
-            pass
 
     def _load_config_file(self):
         """Load experiment configuration from YAML and initialize project parameters."""
@@ -117,25 +112,22 @@ class ProjectManager:
         self._set_project_parameters(config["project_parameters"])
         self._validate_flags()
 
-        config_data = self._prepare_config_data(config["data"])
+        self._prepare_config_data(config)
         config_params = self._prepare_config_params(config["parameters"])
         config_sampling = config["sampling"]
         config_methods = config["nstar_estimation_methods"]
 
-        df = self._load_and_filter_dataset(config_data)
-        config_data["factor_configurations"] = self._extract_factor_configurations(df, config_data)
-        config_data["results"] = df
+        self._set_factor_lists()
+        self.results = self._load_and_filter_dataset()
+        self.config_data["factor_configurations"] = self._extract_factor_configurations()
 
-        self._set_factor_lists(config_data)
-        self.na = df.nunique()[config_data["alternatives_col_name"]]
+        self.na = self.results.nunique()[self.config_data["alternatives_col_name"]]
 
         # Assign configuration to attributes
-        self.config_data = config_data
         self.config_params = config_params
         self.config_sampling = config_sampling
-        self._load_kernels(config["kernels"], df)
+        self._load_kernels(config["kernels"], self.results)
         self.estimation_methods = config_methods
-        self.results = config_data["results"]
 
     # ---------------------- Subroutines ----------------------
 
@@ -144,7 +136,14 @@ class ProjectManager:
             return yaml.safe_load(file)
 
     def _initialize_paths(self, paths_cfg: dict):
-        self.outputs_dir = Path(paths_cfg["outputs_dir"])
+        try:
+            if self.demo_dir != Path(os.getcwd()):
+                os.chdir(self.demo_dir)
+                print(f"[INFO] Moved working directory to {self.demo_dir}")
+        except FileNotFoundError:
+            print(f"[WARNING] Failed moving working directory to {self.demo_dir}.")
+
+        self.outputs_dir = self.demo_dir / paths_cfg["outputs_dir"]
         self.figures_dir = self.outputs_dir / "figures"
         self.sample_mmd_dir = self.outputs_dir / "MMD_precomputed"
         self.approx_mmd_dir = self.outputs_dir / "MMD_approximated_icdf_coefficients"
@@ -154,6 +153,8 @@ class ProjectManager:
         self.load_precomputed_mmd = general_cfg["load_precomputed_mmd"]
         self.dump_results = general_cfg["dump_results"]
         self.verbose = general_cfg["verbose"]
+
+
 
     def _validate_flags(self):
         if self.delete_existing_results and self.load_precomputed_mmd:
@@ -169,48 +170,53 @@ class ProjectManager:
                 params_cfg[key] = [params_cfg[key]]
         return params_cfg
 
-    def _prepare_config_data(self, data_cfg: dict) -> dict:
-        assert sum(value is None for value in data_cfg["experimental_factors_name_lvl"].values()) == 1, (
+    def _prepare_config_data(self, config: dict) -> None:
+        assert sum(value is None for value in config["data"]["experimental_factors_name_lvl"].values()) == 1, (
             "Exactly one factor must be set to null in config.yaml."
         )
-        return data_cfg
+        self.config_data = config["data"]
 
-    def _load_and_filter_dataset(self, config_data: dict) -> pd.DataFrame:
-        df = pd.read_parquet(config_data["dataset_path"])
+    def _load_and_filter_dataset(self) -> pd.DataFrame:
+        df = pd.read_parquet(self.config_data["dataset_path"])
+
+        # Remove the columns not indicated as either factors, col of alternatives, or col of target (in config.yaml)
+        tokeep = (self.all_factors + [self.config_data["alternatives_col_name"], self.config_data["target_col_name"]])
+        df  = df[tokeep]
+
+        # Filter for the held-constant factors
         query_str = " and ".join(
             f"{factor} == '{lvl}'" if isinstance(lvl, str) else f"{factor} == {lvl}"
-            for factor, lvl in config_data["experimental_factors_name_lvl"].items()
+            for factor, lvl in self.config_data["experimental_factors_name_lvl"].items()
             if lvl not in [None, "_all"]
         )
         if len(query_str) == 0:
             return df
-
         return df.query(query_str).reset_index(drop=True)
 
-    def _extract_factor_configurations(self, df: pd.DataFrame, config_data: dict) -> dict:
+    def _extract_factor_configurations(self) -> dict:
         try:
-            return df.groupby(
+            return self.results.groupby(
                 [
                     factor
-                    for factor, lvl in config_data["experimental_factors_name_lvl"].items()
+                    for factor, lvl in self.config_data["experimental_factors_name_lvl"].items()
                     if lvl != self.flag_generalizability_factor
                 ]
             ).groups
         except ValueError:
-            return {"None": df.index}
+            return {"None": self.results.index}
 
-    def _set_factor_lists(self, config_data: dict):
-        self.all_factors = list(config_data["experimental_factors_name_lvl"].keys())
+    def _set_factor_lists(self):
+        self.all_factors = list(self.config_data["experimental_factors_name_lvl"].keys())
         self.design_factors = [
-            f for f, lvl in config_data["experimental_factors_name_lvl"].items()
+            f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
             if lvl == self.flag_design_factor
         ]
         self.generalizability_factors = [
-            f for f, lvl in config_data["experimental_factors_name_lvl"].items()
+            f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
             if lvl == self.flag_generalizability_factor
         ]
         self.held_constant_factors = [
-            f for f, lvl in config_data["experimental_factors_name_lvl"].items()
+            f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
             if lvl not in [self.flag_design_factor, self.flag_generalizability_factor]
         ]
         self.configuration_factors = self.design_factors + self.held_constant_factors
@@ -267,7 +273,7 @@ class ProjectManager:
         df_grouped_list = [x[1] for x in self.results.groupby(self.configuration_factors)]
         configurations = [self.get_configurations(df_grouped) for df_grouped in df_grouped_list]
 
-        return [(configuration, df_grouped) for configuration, df_grouped in zip(configurations, df_grouped_list)]
+        return list(zip(configurations, df_grouped_list))
 
     @staticmethod
     def _get_query_string_from_configuration(configuration: dict):
@@ -484,17 +490,25 @@ class ProjectManager:
         dfq = (dfmmd.groupby("n")["mmd"].quantile(self.config_params["alpha"], interpolation="higher")
                .rename("q_alpha").rename_axis(index=["n", "alpha"]).reset_index())
 
+        if (dfq["q_alpha"] == 0.0).all():
+            print(
+                f"[WARNING] Degenerate quantiles for configuration {dict2str(configuration)} and kernel {kernel_obj}. "
+                f"Skipping nstar prediction and setting nstar=1.")
+
         out = []
         for alpha, group in dfq.groupby("alpha").groups.items():
             dftmp = dfq.iloc[group]
-            logq = np.log(dftmp["q_alpha"].values.reshape(-1, 1))
-            logn = np.log(dftmp["n"].values.reshape(-1, 1))
+            if (dftmp["q_alpha"] == 0.0).any():
+                b0 = b1 = 0
+            else:
+                logq = np.log(dftmp["q_alpha"].values.reshape(-1, 1))
+                logn = np.log(dftmp["n"].values.reshape(-1, 1))
 
-            # logn = b1 * logq + b0
-            lr = LinearRegression()
-            lr.fit(logq, logn)
-            b1 = lr.coef_[0, 0]
-            b0 = lr.intercept_[0]
+                # logn = b1 * logq + b0
+                lr = LinearRegression()
+                lr.fit(logq, logn)
+                b1 = lr.coef_[0, 0]
+                b0 = lr.intercept_[0]
 
             for delta in self.config_params["delta"]:
                 eps = kernel_obj.get_eps(delta, na=self.na)
@@ -567,8 +581,7 @@ class ProjectManager:
 
         return np.sqrt(self.wilson_hilferty_inv(self.normal_icdf_Lin(alpha), k, a)  / n)
 
-    @staticmethod
-    def _get_nstar_mmd_icdf_approximation(eps: float, alpha: float, L1: float, L4: float) -> float:
+    def _get_nstar_mmd_icdf_approximation(self, eps: float, alpha: float, L1: float, L4: float) -> float:
         """
         Evaluate the approximation of the inverse cumulative function (ICDF) of the MMD.
 
@@ -591,7 +604,14 @@ class ProjectManager:
         c2 = 514089
         c3 = 1.664 * 10 ** 6
 
-        return -2 * np.log(eps) + 3 * np.log(np.sqrt(2 / (9 * k)) * (c0 + c1 * np.sqrt(c2 - c3 * np.log(2 * (1 - alpha)))) + (1 - 2 / (9 * k))) + np.log(a * k)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            out = -2 * np.log(eps) \
+                  + 3 * np.log(np.sqrt(2 / (9 * k)) * (c0 + c1 * np.sqrt(c2 - c3 * np.log(2 * (1 - alpha)))) +
+                             (1 - 2 / (9 * k))) \
+                  + np.log(a * k)
+
+        return out
 
     # --- Approximation of nstar
 
@@ -652,10 +672,27 @@ class ProjectManager:
         L3 = np.sum(np.triu(np.outer(lam, lam), 1))
         L4 = 3 * L2 + 2 * L3
 
+        if np.isclose(L1, 0.0):
+            print(
+                f"[WARNING] Degenerate operator Th for configuration {dict2str(configuration)} and kernel {kernel_obj}. "
+                f"Skipping nstar approximation and setting nstar=1.")
+
         out = []
         for alpha, delta in product(alphas, deltas):
             eps = kernel_obj.get_eps(delta, na=self.na)
-            nstar = np.exp(self._get_nstar_mmd_icdf_approximation(eps, alpha, L1, L4))
+            if not np.isclose(L1, 0.0):
+                nstar_log = self._get_nstar_mmd_icdf_approximation(eps, alpha, L1, L4)
+
+                if not np.isfinite(nstar_log):
+                    if self.verbose:
+                        print(f"[WARNING] Invalid approximation for configuration {dict2str(configuration)} "
+                              f"and kernel {kernel_obj}.")
+                    nstar = np.nan
+                else:
+                    nstar = np.exp(nstar_log)
+
+            else:
+                nstar = 1
 
             result_dict = dict(configuration,
                                **dict(kernel=str(kernel_obj), alpha=alpha, eps=eps, delta=delta,
@@ -720,25 +757,37 @@ class ProjectManager:
         else:
             iterator = self._get_configurations_and_grouped_df()
 
-        out = []
-        for configuration, df_grouped in iterator:
-            # Rank the alternatives
-            results_rankings = ru.get_matrix_from_df(df_grouped, factors=list(self.all_factors),
-                                                     alternatives=self.config_data["alternatives_col_name"],
-                                                     target=self.config_data["target_col_name"],
-                                                     get_rankings=True,
-                                                     lower_is_better=self.config_data["target_is_error"],
-                                                     impute_missing=True,
-                                                     as_numpy=True)
-            results_matrix = ru.get_matrix_from_df(df_grouped, factors=list(self.all_factors),
-                                                   alternatives=self.config_data["alternatives_col_name"],
-                                                   target=self.config_data["target_col_name"],
-                                                   get_rankings=False, impute_missing=True, as_numpy=True)
+        self.results_rankings = ru.get_matrix_from_df(self.results, factors=list(self.all_factors),
+                                                      alternatives=self.config_data["alternatives_col_name"],
+                                                      target=self.config_data["target_col_name"],
+                                                      get_rankings=True, lower_is_better=self.config_data["target_is_error"],
+                                                      impute_missing=True,
+                                                      tol_missing_indices=self.config_params["tol_missing_alternatives"],
+                                                      tol_missing_columns=self.config_params["tol_missing_conditions"],
+                                                      as_numpy=False, verbose=self.verbose)
 
+        self.results_matrix = ru.get_matrix_from_df(self.results, factors=list(self.all_factors),
+                                                    alternatives=self.config_data["alternatives_col_name"],
+                                                    target=self.config_data["target_col_name"],
+                                                    get_rankings=False, impute_missing=True,
+                                                    tol_missing_indices=self.config_params["tol_missing_alternatives"],
+                                                    tol_missing_columns=self.config_params["tol_missing_conditions"],
+                                                    as_numpy=False, verbose=self.verbose)
+
+        out = []
+        for configuration, _ in iterator:
+            mask = pd.Series(True, index=self.results_rankings.columns)
+            for col_level, value in configuration.items():
+                mask &= (self.results_rankings.columns.get_level_values(col_level) == value)
+
+            rankings = self.results_rankings.loc[:, mask.values]
+            sample_rankings = ru.SampleAM.from_rank_vector_matrix(rankings.values)
+            sample_vectors = self.results_matrix.loc[:, mask.values].values
+
+            # Rank the alternatives
             # Global sample of rankings available
-            rankings_all = ru.SampleAM.from_rank_vector_matrix(np.array(results_rankings))
-            out = self._generalizability_analysis_one_configuration(sample_rankings=rankings_all,
-                                                                    sample_vectors=results_matrix, out=out,
+            out = self._generalizability_analysis_one_configuration(sample_rankings=sample_rankings,
+                                                                    sample_vectors=sample_vectors, out=out,
                                                                     configuration=configuration)
 
         self.df_nstar = pd.DataFrame(out)
@@ -749,8 +798,8 @@ class ProjectManager:
         return self.df_nstar
 
 class PlotManager(ProjectManager):
-    def __init__(self, config_yaml_path: Union[str, Path], save: bool = True, show: bool = True):
-        super().__init__(config_yaml_path, is_project_manager=False)
+    def __init__(self, config_yaml_path: Union[str, Path], demo_dir: Union[str, Path], save: bool = True, show: bool = True):
+        super().__init__(config_yaml_path, is_project_manager=False, demo_dir=demo_dir)
 
         self.show = show
         self.save = save
@@ -1076,5 +1125,7 @@ class PlotManager(ProjectManager):
         fig.show()
 
 if __name__ == "__main__()":
-    pm = ProjectManager(config_yaml_path="config.yaml")
+    import os
+
+    pm = ProjectManager(config_yaml_path="config.yaml", demo_dir=os.getcwd())
     df_nstar = pm.generalizability_analysis()

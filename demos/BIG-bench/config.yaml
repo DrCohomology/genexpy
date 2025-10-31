@@ -7,7 +7,7 @@ paths:
 project_parameters:
   load_precomputed_mmd: False
   dump_results: True
-  delete_existing_results: False
+  delete_existing_results: True
   verbose: True
 
 # Parameters for the generalizability study:
@@ -18,8 +18,13 @@ project_parameters:
     # mallows: max fraction of discordant pairs for two rankings to be similar
   # seed is hte random seed passed to np.random.default_rng
   # rep is the number of pairs of subsamples used to estimate the distribution of the MMD
+  # tol_missing_alternatives: maximum allowed fraction of missing alternatives for a condition to be kept
+    # e.g., if tol_missing_alternatives = 0.2: if an experiment evaluates 7/10 alternatives, it is filtered out from the analysis
+  # tol_missing_conditions: maximum allowed fraction of missing experiments for an alternative to be kept
+  # e.g., if tol_missing_conditions = 0.2: if an alternative is evaluated in 78/100 experiments, it is filtered out from the analysis
 # The other defining parameter for a generalizability analysis, delta, is defined for every kernel differently,
 # as it has different interpretations (see below).
+
 parameters:
   alpha:
     - 0.7
@@ -35,6 +40,9 @@ parameters:
     - 0.3
   seed: 37
   rep: 200
+  tol_missing_alternatives: 0.2
+  tol_missing_conditions: 0.2
+
 
 # The following entries define the data and how to interpret it.
     # the dataset is stored in dataset_path. Its primary key consists of the experimental factors + alternatives.
@@ -53,7 +61,7 @@ parameters:
     # to True if it contains an error (e.g., as output of sklearn.metrics.mean_squared_error). If the results contain multiple metrics,
     # they ALL HAVE TO BE EITHER SCORES OR ERRORS
 data:
-  dataset_path: data/bigbench_results.parquet
+  dataset_path: data/bigbench_results_prefiltered.parquet
   alternatives_col_name: "model_family_model_name"
   experimental_factors_name_lvl:
     subtask_description: null
@@ -89,8 +97,8 @@ sampling:
   # embedding (fast, recommended): use an equivalent definition of the MMD to speed up the estimation
 nstar_estimation_methods:
   rankings:
-    - "approximation"
     - "embedding"
+    - "approximation"
   vectors:
     - "naive"
     - "approximation"
@@ -99,7 +107,6 @@ nstar_estimation_methods:
   # kernel: the name of a subclass of genexpy.kernels.base.Kernel
   # params: the parameters of a kernel as defined in kernels.py. A list of values
 kernels:
-
   - name: "BordaKernel"
     params:
       alternative: # alternative of interest
