@@ -98,11 +98,18 @@ class ProjectManager:
 
         # --- Initialization steps ---
         self._load_config_file()
+        if self.verbose:
+            print("[INFO] Loaded configuration file.")
+
         if self.is_project_manager:
             self._create_project_directories()
+            if self.verbose:
+                print("[INFO] Created project directories.")
 
         if self.load_precomputed_mmd:
             self._load_precomputed_mmd_df()
+            if self.verbose:
+                print("[INFO] Loaded existing results.")
 
     def _load_config_file(self):
         """Load experiment configuration from YAML and initialize project parameters."""
@@ -153,8 +160,6 @@ class ProjectManager:
         self.load_precomputed_mmd = general_cfg["load_precomputed_mmd"]
         self.dump_results = general_cfg["dump_results"]
         self.verbose = general_cfg["verbose"]
-
-
 
     def _validate_flags(self):
         if self.delete_existing_results and self.load_precomputed_mmd:
@@ -239,7 +244,6 @@ class ProjectManager:
     def _create_project_directories(self):
         if self.delete_existing_results:
             shutil.rmtree(self.outputs_dir)
-            print(f"⚠️ Removed existing directory: {self.outputs_dir}.")
 
         self.sample_mmd_dir.mkdir(parents=True, exist_ok=True)
         readme = self.sample_mmd_dir / "README.md"
@@ -258,8 +262,6 @@ class ProjectManager:
         readme.write_text("""
             This directory contains the figures and plots. 
         """)
-
-        f"📁 Created new output directory: {self.outputs_dir}."
 
     def get_configurations(self, df_grouped: pd.DataFrame) -> dict:
         # Check that design and held-constant factors have been filtered correctly. They should have exactly one unique values
@@ -391,7 +393,7 @@ class ProjectManager:
 
     def _dump_nstar_df(self):
         if self.df_nstar is None:
-            warnings.warn("No df_nstar to dump. Run generalizability_analysis to initialize it.")
+            warnings.warn("No df_nstar to dump. Run generalizability_analysis first to initialize it.")
             return
 
         match self.df_format:
@@ -399,6 +401,9 @@ class ProjectManager:
                 self.df_nstar.to_parquet(self.outputs_dir / f"nstar.{self.df_format}")
             case _:
                 raise NotImplementedError()
+
+        if self.verbose:
+            print(f"[INFO] Predicted nstar stored in {self.outputs_dir / f'nstar.{self.df_format}'}.")
 
     def _get_existing_precomputed_mmd(self, configuration: dict, kernel_obj: kernels.base.Kernel, N: int):
         if self.dfmmd is not None:
@@ -492,7 +497,7 @@ class ProjectManager:
 
         if (dfq["q_alpha"] == 0.0).all():
             print(
-                f"[WARNING] Degenerate quantiles for configuration {dict2str(configuration)} and kernel {kernel_obj}. "
+                f"[WARNING] Degenerate quantiles for configuration: {dict2str(configuration)} and kernel: {kernel_obj}. "
                 f"Skipping nstar prediction and setting nstar=1.")
 
         out = []
@@ -674,23 +679,21 @@ class ProjectManager:
 
         if np.isclose(L1, 0.0):
             print(
-                f"[WARNING] Degenerate operator Th for configuration {dict2str(configuration)} and kernel {kernel_obj}. "
+                f"[WARNING] Degenerate operator Th for configuration: {dict2str(configuration)} and kernel: {kernel_obj}. "
                 f"Skipping nstar approximation and setting nstar=1.")
 
         out = []
+        invalid_nstar = False
         for alpha, delta in product(alphas, deltas):
             eps = kernel_obj.get_eps(delta, na=self.na)
             if not np.isclose(L1, 0.0):
                 nstar_log = self._get_nstar_mmd_icdf_approximation(eps, alpha, L1, L4)
 
                 if not np.isfinite(nstar_log):
-                    if self.verbose:
-                        print(f"[WARNING] Invalid approximation for configuration {dict2str(configuration)} "
-                              f"and kernel {kernel_obj}.")
                     nstar = np.nan
+                    invalid_nstar = True
                 else:
                     nstar = np.exp(nstar_log)
-
             else:
                 nstar = 1
 
@@ -699,6 +702,10 @@ class ProjectManager:
                                       disjoint=None, replace=None,
                                       method="approximation", N=N, nstar=nstar))
             out.append(result_dict)
+
+        if self.verbose and invalid_nstar:
+            print(f"[WARNING] Invalid approximation for configuration: {dict2str(configuration)} "
+                  f"and kernel: {kernel_obj}. There might not be enough data.")
 
         coefficients = dict(configuration, **dict(kernel=str(kernel_obj), N=N, L1=L1, L4=L4))
         self._dump_mmd_icdf_coefficients_df(pd.DataFrame(coefficients, index=[0]))
@@ -751,12 +758,6 @@ class ProjectManager:
 
     def generalizability_analysis(self):
 
-        if self.verbose:
-            iterator = tqdm(self._get_configurations_and_grouped_df(),
-                            position=0, desc="Configurations", leave=True)
-        else:
-            iterator = self._get_configurations_and_grouped_df()
-
         self.results_rankings = ru.get_matrix_from_df(self.results, factors=list(self.all_factors),
                                                       alternatives=self.config_data["alternatives_col_name"],
                                                       target=self.config_data["target_col_name"],
@@ -764,7 +765,7 @@ class ProjectManager:
                                                       impute_missing=True,
                                                       tol_missing_indices=self.config_params["tol_missing_alternatives"],
                                                       tol_missing_columns=self.config_params["tol_missing_conditions"],
-                                                      as_numpy=False, verbose=self.verbose)
+                                                      as_numpy=False)
 
         self.results_matrix = ru.get_matrix_from_df(self.results, factors=list(self.all_factors),
                                                     alternatives=self.config_data["alternatives_col_name"],
@@ -772,7 +773,20 @@ class ProjectManager:
                                                     get_rankings=False, impute_missing=True,
                                                     tol_missing_indices=self.config_params["tol_missing_alternatives"],
                                                     tol_missing_columns=self.config_params["tol_missing_conditions"],
-                                                    as_numpy=False, verbose=self.verbose)
+                                                    as_numpy=False)
+
+
+        if self.verbose:
+            na_tmp = self.results.nunique()[self.config_data['alternatives_col_name']]
+            print(f"[INFO] Kept {self.results_rankings.shape[0]} / {na_tmp} indices (alternatives) and "
+                  f"{self.results_rankings.shape[1]} / {self.results.groupby(self.all_factors).count()} columns (conditions).")
+            print(f"[INFO] Starting the generalizability analysis.")
+
+        if self.verbose:
+            iterator = tqdm(self._get_configurations_and_grouped_df(),
+                            position=0, desc="Configurations", leave=True)
+        else:
+            iterator = self._get_configurations_and_grouped_df()
 
         out = []
         for configuration, _ in iterator:
@@ -784,8 +798,6 @@ class ProjectManager:
             sample_rankings = ru.SampleAM.from_rank_vector_matrix(rankings.values)
             sample_vectors = self.results_matrix.loc[:, mask.values].values
 
-            # Rank the alternatives
-            # Global sample of rankings available
             out = self._generalizability_analysis_one_configuration(sample_rankings=sample_rankings,
                                                                     sample_vectors=sample_vectors, out=out,
                                                                     configuration=configuration)
