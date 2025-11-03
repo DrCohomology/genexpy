@@ -682,7 +682,7 @@ def get_matrix_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr
                        impute_missing=True, tol_missing_indices: float = 0.2,
                        tol_missing_columns: float = 0.2,
                        get_rankings: bool = True, lower_is_better: bool = True,
-                       as_numpy: bool=False, verbose: bool = True) -> Union[pd.DataFrame, np.ndarray]:
+                       as_numpy: bool=False) -> Union[pd.DataFrame, np.ndarray]:
     """
     Computes a ranking of 'alternatives' for each combination of 'factors', according to 'target'.
 
@@ -728,15 +728,10 @@ def get_matrix_from_df(df: pd.DataFrame, factors: Iterable, alternatives: AnyStr
         raise ValueError("target must be a column of df.")
 
     out = df.reset_index(drop=True).pivot(index=alternatives, columns=factors, values=target)
-    original_shape = out.shape
 
     # filter out columns
     out = out.loc[:, out.isna().mean(axis=0) <= tol_missing_indices]
     out = out.loc[out.isna().mean(axis=1) <= tol_missing_columns, :]
-
-    if verbose:
-        print(f"[INFO] Kept {out.shape[0]} / {original_shape[0]} indices (alternatives) and "
-              f"{out.shape[1]} / {original_shape[1]} columns (conditions).")
 
     if impute_missing:
         out = out.fillna(0)
