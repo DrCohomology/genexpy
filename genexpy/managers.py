@@ -779,7 +779,7 @@ class ProjectManager:
         if self.verbose:
             na_tmp = self.results.nunique()[self.config_data['alternatives_col_name']]
             print(f"[INFO] Kept {self.results_rankings.shape[0]} / {na_tmp} indices (alternatives) and "
-                  f"{self.results_rankings.shape[1]} / {self.results.groupby(self.all_factors).count()} columns (conditions).")
+                  f"{self.results_rankings.shape[1]} / {len(self.results.groupby(self.all_factors))} columns (conditions).")
             print(f"[INFO] Starting the generalizability analysis.")
 
         if self.verbose:

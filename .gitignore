@@ -1,18 +1,9 @@
 # Output directory
-/demos/BIG-bench
-/demos/Categorical encoders
-/demos/Estimation of nstar
-/demos/Categorical encoders (extended Jaccard)
-/demos/Synthetic data
-/demos/Synthetic data/outputs
-/demos/Synthetic data/better_vectorized_outputs
-/demos/template/outputs
-/test/outputs
-/test
+/demos/BIG-bench/outputs
+/demos/Categorical encoders/outputs
+/demos/Template/outputs
 /.idea
-/demos/Template/main_legacy.py
-/demos/Template/retreat2025_presentation.py
-
+/deprecated
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
