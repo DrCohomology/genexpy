@@ -8,7 +8,7 @@ def read_requirements():
 
 setup(
     name='genexpy',
-    version='0.1.0',
+    version='1.0.0',
     packages=find_packages(),
     description='A package to quantify the generalizability of experimental studies.',
     long_description=open('README.md').read(),
@@ -17,5 +17,5 @@ setup(
     author_email='anonym@anonym.com',
     url='anonym.com',
     install_requires=read_requirements(),
-    python_requires='>=3.11.8',
+    python_requires='>=3.13.0',
 )
