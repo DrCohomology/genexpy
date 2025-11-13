@@ -1,7 +1,7 @@
 # Output directory
-/demos/BIG-bench/outputs
-/demos/Categorical encoders/outputs
-/demos/Template/outputs
+/demos/case_studies/*/outputs
+!/demos/case_studies/*/outputs/figures
+
 /.idea
 /deprecated
 

@@ -585,7 +585,7 @@ class JaccardKernel(RankingKernel):
         return len(set(topk1).intersection(set(topk2))) / len(set(topk1).union(set(topk2)))
 
     def _gram_matrix_scalar(self, rv1: RankVector, rv2: RankVector):
-        """
+        r"""
         Computes the Gram matrix of the Jaccard kernel between two sets of rankings.
 
         The Jaccard kernel is a similarity measure between two sets of rankings,
@@ -689,7 +689,7 @@ class MallowsKernel(RankingKernel):
         return np.exp(- self.nu * out / 2)
 
     def _gram_matrix_scalar(self, ams1: ru.AdjacencyMatrix, ams2: ru.AdjacencyMatrix):
-        """
+        r"""
         Computes the Gram matrix of the Mallows kernel between two sets of rankings,
         represented as adjacency matrices.
 
