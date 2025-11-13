@@ -1,6 +1,5 @@
 # Output directory
 /demos/case_studies/*/outputs
-!/demos/case_studies/*/outputs/figures
 
 /.idea
 /deprecated
@@ -249,3 +248,4 @@ fabric.properties
 /demos/Synthetic data/
 /deprecated/Template_test_new_features/
 /deprecated/
+/demos/synthetic_data/significance.py

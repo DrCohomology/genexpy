@@ -151,7 +151,7 @@ class ProjectManager:
             print(f"[WARNING] Failed moving working directory to {self.demo_dir}.")
 
         self.outputs_dir = self.demo_dir / paths_cfg["outputs_dir"]
-        self.figures_dir = self.outputs_dir / "figures"
+        self.figures_dir = self.demo_dir / "figures"
         self.sample_mmd_dir = self.outputs_dir / "MMD_precomputed"
         self.approx_mmd_dir = self.outputs_dir / "MMD_approximated_icdf_coefficients"
 
