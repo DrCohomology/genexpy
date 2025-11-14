@@ -186,7 +186,7 @@ class ProjectManager:
 
         # Remove the columns not indicated as either factors, col of alternatives, or col of target (in config.yaml)
         tokeep = (self.all_factors + [self.config_data["alternatives_col_name"], self.config_data["target_col_name"]])
-        df  = df[tokeep]
+        df = df[tokeep]
 
         # Filter for the held-constant factors
         query_str = " and ".join(
@@ -325,9 +325,8 @@ class ProjectManager:
             print(
                 f"Loaded precomputed MMD for {len(self.precomputed_configurations)} configurations, {len(self.precomputed_kernels)} kernels, and {len(self.precomputed_Ns)} values of N.")
 
-
     def _load_mmd_icdf_coefficients_df(self, configuration_str: str = None, kernel_name: str = None, N: int = None,
-                                 verbose: bool = False):
+                                       verbose: bool = False):
         dfs = []
         for filepath in self.approx_mmd_dir.glob(f"*.{self.df_format}"):
             match self.df_format:
@@ -377,7 +376,8 @@ class ProjectManager:
         configuration = dict2str(self.get_configurations(df))
         match self.df_format:
             case "parquet":
-                df.to_parquet(self.sample_mmd_dir / f"mmd__configuration={configuration}__kernel={kernel_name}__N={N}.parquet")
+                df.to_parquet(
+                    self.sample_mmd_dir / f"mmd__configuration={configuration}__kernel={kernel_name}__N={N}.parquet")
             case _:
                 raise NotImplementedError()
 
@@ -387,7 +387,8 @@ class ProjectManager:
         configuration = dict2str(self.get_configurations(df))
         match self.df_format:
             case "parquet":
-                df.to_parquet(self.approx_mmd_dir / f"mmd_icdf__configuration={configuration}__kernel={kernel_name}__N={N}.parquet")
+                df.to_parquet(
+                    self.approx_mmd_dir / f"mmd_icdf__configuration={configuration}__kernel={kernel_name}__N={N}.parquet")
             case _:
                 raise NotImplementedError()
 
@@ -447,7 +448,8 @@ class ProjectManager:
 
     def _estimate_mmd__from_experiments_vectors(self, s: np.ndarray[float], configuration: dict,
                                                 kernel_obj: kernels.vectors.VectorKernel, N: int,
-                                                method: Literal["naive", "embedding", "approximation"], seed: int = None):
+                                                method: Literal["naive", "embedding", "approximation"],
+                                                seed: int = None):
 
         # Get a subsample of size N
         rng = np.random.default_rng(seed=seed)
@@ -547,8 +549,8 @@ class ProjectManager:
         return ((y / (a * k)) ** (1 / 3) - (1 - 2 / (9 * k))) / np.sqrt(2 / (9 * k))
 
     @staticmethod
-    def wilson_hilferty_inv(z: np.ndarray, k:float, a: float) -> np.ndarray[float]:
-        return a * k * (np.sqrt(2/(9*k)) * z + 1 - 2/(9*k)) ** 3
+    def wilson_hilferty_inv(z: np.ndarray, k: float, a: float) -> np.ndarray[float]:
+        return a * k * (np.sqrt(2 / (9 * k)) * z + 1 - 2 / (9 * k)) ** 3
 
     @staticmethod
     def normal_cdf_Lin(x: np.ndarray):
@@ -577,14 +579,14 @@ class ProjectManager:
         a = (L4 - L1 ** 2) / L1
         k = 2 * L1 ** 2 / (L4 - L1 ** 2)
 
-        return self.normal_cdf_Lin(self.wilson_hilferty(n*eps**2, k, a))
+        return self.normal_cdf_Lin(self.wilson_hilferty(n * eps ** 2, k, a))
 
     def _mmd_icdf_approximation(self, alpha: np.ndarray[float], L1, L4, n) -> np.ndarray[float]:
 
         a = (L4 - L1 ** 2) / L1
         k = 2 * L1 ** 2 / (L4 - L1 ** 2)
 
-        return np.sqrt(self.wilson_hilferty_inv(self.normal_icdf_Lin(alpha), k, a)  / n)
+        return np.sqrt(self.wilson_hilferty_inv(self.normal_icdf_Lin(alpha), k, a) / n)
 
     def _get_nstar_mmd_icdf_approximation(self, eps: float, alpha: float, L1: float, L4: float) -> float:
         """
@@ -613,7 +615,7 @@ class ProjectManager:
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             out = -2 * np.log(eps) \
                   + 3 * np.log(np.sqrt(2 / (9 * k)) * (c0 + c1 * np.sqrt(c2 - c3 * np.log(2 * (1 - alpha)))) +
-                             (1 - 2 / (9 * k))) \
+                               (1 - 2 / (9 * k))) \
                   + np.log(a * k)
 
         return out
@@ -761,9 +763,11 @@ class ProjectManager:
         self.results_rankings = ru.get_matrix_from_df(self.results, factors=list(self.all_factors),
                                                       alternatives=self.config_data["alternatives_col_name"],
                                                       target=self.config_data["target_col_name"],
-                                                      get_rankings=True, lower_is_better=self.config_data["target_is_error"],
+                                                      get_rankings=True,
+                                                      lower_is_better=self.config_data["target_is_error"],
                                                       impute_missing=True,
-                                                      tol_missing_indices=self.config_params["tol_missing_alternatives"],
+                                                      tol_missing_indices=self.config_params[
+                                                          "tol_missing_alternatives"],
                                                       tol_missing_columns=self.config_params["tol_missing_conditions"],
                                                       as_numpy=False)
 
@@ -774,7 +778,6 @@ class ProjectManager:
                                                     tol_missing_indices=self.config_params["tol_missing_alternatives"],
                                                     tol_missing_columns=self.config_params["tol_missing_conditions"],
                                                     as_numpy=False)
-
 
         if self.verbose:
             na_tmp = self.results.nunique()[self.config_data['alternatives_col_name']]
@@ -809,8 +812,10 @@ class ProjectManager:
 
         return self.df_nstar
 
+
 class PlotManager(ProjectManager):
-    def __init__(self, config_yaml_path: Union[str, Path], demo_dir: Union[str, Path], save: bool = True, show: bool = True):
+    def __init__(self, config_yaml_path: Union[str, Path], demo_dir: Union[str, Path], save: bool = True,
+                 show: bool = True):
         super().__init__(config_yaml_path, is_project_manager=False, demo_dir=demo_dir)
 
         self.show = show
@@ -1135,6 +1140,7 @@ class PlotManager(ProjectManager):
         sns.despine(top=True, right=True)
 
         fig.show()
+
 
 if __name__ == "__main__()":
     import os
