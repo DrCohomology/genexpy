@@ -776,7 +776,10 @@ class ProjectManager:
             # Set the Universe
             kernel_obj.set_support(sample_rankings.get_support_pmf()[0])
 
-            for N in range(self.config_sampling["sample_size"], len(sample_rankings),
+            print(len(sample_rankings), self.config_params["Nmax"])
+
+            for N in range(self.config_sampling["sample_size"], np.nanmin((len(sample_rankings),
+                                                                          self.config_params["Nmax"])),
                            self.config_sampling["sample_size"]):
                 if isinstance(kernel_obj, kernels.rankings.RankingKernel):
                     for method in self.estimation_methods["rankings"]:

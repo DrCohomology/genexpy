@@ -22,6 +22,8 @@ project_parameters:
     # e.g., if tol_missing_alternatives = 0.2: if an experiment evaluates 7/10 alternatives, it is filtered out from the analysis
   # tol_missing_conditions: maximum allowed fraction of missing experiments for an alternative to be kept
   # e.g., if tol_missing_conditions = 0.2: if an alternative is evaluated in 78/100 experiments, it is filtered out from the analysis
+  # Nmax is the maximum size of the simulated preliminary study (sample size to compute n-generalizability)
+    # set to `null` to impose no upper boundary
 # The other defining parameter for a generalizability analysis, delta, is defined for every kernel differently,
 # as it has different interpretations (see below).
 parameters:
@@ -41,6 +43,7 @@ parameters:
   rep: 200
   tol_missing_alternatives: 0.2
   tol_missing_conditions: 0.2
+  Nmax: 100
 
 
 # The following entries define the data and how to interpret it.

@@ -65,7 +65,7 @@ class VectorKernel(base.Kernel):
         """
         pass
 
-    def gram_matrix(self, s1: np.ndarray[float], s2: np.ndarray[float]) -> np.ndarray[float]:
+    def gram_matrix(self, s1: np.ndarray, s2: np.ndarray) -> np.ndarray[float]:
         raise NotImplementedError
 
     def __repr__(self):
@@ -76,7 +76,7 @@ class VectorKernel(base.Kernel):
 
     @staticmethod
     def get_subsample_pair(s: np.ndarray[float], subsample_size: int, disjoint: bool = True, replace: bool = False,
-                           seed: int = None) -> Tuple[np.ndarray[float], np.ndarray[float]]:
+                           seed: int = None) -> Tuple[np.ndarray, np.ndarray]:
         na, n = s.shape
 
         rng = np.random.default_rng(seed)
