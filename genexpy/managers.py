@@ -286,8 +286,21 @@ class ProjectManager:
         return query_str
 
     # ---- Routines to load and dump files
+    def _load_preloaded_mmd_df(self):
+        try:
+            self.dfmmd = pd.read_parquet(self.outputs_dir / "preloaded_mmd.parquet")
+            return True
+        except FileNotFoundError:
+            return False
+
     def _load_precomputed_mmd_df(self, configuration_str: str = None, kernel_name: str = None, N: int = None,
                                  verbose: bool = False):
+
+        if self._load_preloaded_mmd_df():
+            if verbose:
+                print("[INFO] Loaded preloaded mmd dataframe.")
+            return
+
         dfs = []
         for filepath in self.sample_mmd_dir.glob(f"*.{self.df_format}"):
             match self.df_format:
@@ -319,14 +332,31 @@ class ProjectManager:
             self.dfmmd = pd.concat(dfs, ignore_index=True)
         except ValueError:
             if verbose:
-                print(f"No precomputed MMD to load.")
+                print(f"[INFO] No precomputed MMD to load.")
 
         if verbose:
-            print(
-                f"Loaded precomputed MMD for {len(self.precomputed_configurations)} configurations, {len(self.precomputed_kernels)} kernels, and {len(self.precomputed_Ns)} values of N.")
+            print(f"[INFO] Loaded precomputed MMD for {len(self.precomputed_configurations)} configurations, "
+                  f"{len(self.precomputed_kernels)} kernels, and {len(self.precomputed_Ns)} values of N.")
+
+        self.dfmmd.to_parquet(self.outputs_dir / "preloaded_mmd.parquet")
+        if verbose:
+            print(f"[INFO] Dumped preloaded MMD dataframe in {self.outputs_dir / "preloaded_mmd.parquet"}")
+
+    def _load_preloaded_mmd_icdf(self):
+        try:
+            self.icdf_coefficiens = pd.read_parquet(self.outputs_dir / "preloaded_mmd_icdf_coeff.parquet")
+            return True
+        except FileNotFoundError:
+            return False
 
     def _load_mmd_icdf_coefficients_df(self, configuration_str: str = None, kernel_name: str = None, N: int = None,
                                        verbose: bool = False):
+
+        if self._load_preloaded_mmd_icdf():
+            if verbose:
+                print("[INFO] Loaded preloaded mmd icdf coefficients dataframe.")
+            return
+
         dfs = []
         for filepath in self.approx_mmd_dir.glob(f"*.{self.df_format}"):
             match self.df_format:
@@ -357,8 +387,12 @@ class ProjectManager:
                 print(f"No MMD ICDF coefficients to load.")
 
         if verbose:
-            print(
-                f"Loaded MMD ICDF coefficients.")
+            print(f"Loaded MMD ICDF coefficients.")
+
+        self.icdf_coefficiens.to_parquet(self.outputs_dir / "preloaded_mmd_icdf_coeff.parquet")
+        if verbose:
+            print(f"[INFO] Dumped preloaded MMD dataframe in {self.outputs_dir / "preloaded_mmd_icdf_coeff.parquet"}")
+
 
     def _load_nstar_df(self, force=True):
         if self.df_nstar is not None and not force:
@@ -564,7 +598,7 @@ class ProjectManager:
         c3 = 1.664 * 10 ** 6
         return c0 + c1 * np.sqrt(c2 - c3 * np.log(-2 * (alpha - 1)))
 
-    def _mmd_cdf_approximation(self, eps: float, L1: float, L4: float, n: int) -> float:
+    def _mmd_cdf_approximation(self, eps: np.ndarray, L1: float, L4: float, n: int) -> float:
         """
         Evaluate the approximated CDF of the MMD.
         Close-formula approximation via the folliwng steps:
@@ -855,7 +889,7 @@ class PlotManager(ProjectManager):
         # pretty names
         self.pretty_columns = {"alpha": r"$\alpha^*$", 'eps': r"$\varepsilon^*$", 'nstar': r"$n^*$",
                                'delta': r"$\delta^*$",
-                               'N': r"$N$", 'nstar_absrel_error': "relative error", 'aq': r"$\varepsilon^\alpha_n$",
+                               'N': r"$N$", 'nstar_absrel_error': "relative error", 'aq': r"$\varepsilon$",
                                'n': r"$n$"}  # columns
 
         self.pretty_kernels = {"borda_kernel_idx_OHE": r"$\kappa_b^{\text{OHE}, 1/n}$",
@@ -990,7 +1024,8 @@ class PlotManager(ProjectManager):
                 ax.axhline(alpha, **self.axlines_args)
                 ax.axvline(eps, **self.axlines_args)
 
-                ax.set_ylabel(r"$n$-Gen / Pr(MMD$_n < \varepsilon$)")
+                if icol == 0:
+                    ax.set_ylabel(r"$n$-Gen / $F_{\text{MMD}_n}$")
 
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning)
@@ -1027,9 +1062,9 @@ class PlotManager(ProjectManager):
                 ns_pred = np.exp(lr.predict(np.log(epss).reshape(-1, 1)).reshape(1, -1)[0])
                 nstar = int(ns_pred[np.argmin(np.abs(epss - eps))])
 
-                ax.plot(epss, ns_pred, color="maroon")
+                ax.plot(epss, ns_pred, color="maroon", ls=":", alpha=0.7)
                 ax.plot(eps, nstar, marker='*', color='maroon', markersize=7)
-                ax.text(eps * 2, 1.5 * nstar, rf"$n^*_{{{Ncol}}}$", color="maroon")
+                ax.text(eps * 1.5, 1.5 * nstar, rf"$n^*_{{{Ncol}}}$", color="maroon")
 
                 # Quantile lines
                 # for (n, aq), color in zip(alpha_quantiles.items(), sns.color_palette(palette, n_colors=len(alpha_quantiles))):
@@ -1132,8 +1167,8 @@ class PlotManager(ProjectManager):
         l = [mmd_cdf_symbol, approx_cdf_symbol]
         ax.legend(h, l, frameon=False)
 
-        ax.set_xscale("log")
-        ax.set_ylabel("\hat\Phi_n")
+        ax.set_xscale(r"log")
+        ax.set_ylabel(r"\hat\Phi_n")
         ax.set_xlabel(r"$\varepsilon$")
         ax.set_xlim(10e-3, 2)
 
