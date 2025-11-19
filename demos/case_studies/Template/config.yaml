@@ -5,6 +5,7 @@ paths:
 
 # Parameters for the ProjectManager
 project_parameters:
+  name: "template - change me"
   load_precomputed_mmd: False
   dump_results: True
   delete_existing_results: False

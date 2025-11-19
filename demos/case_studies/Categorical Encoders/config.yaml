@@ -5,6 +5,7 @@ paths:
 
 # Parameters for the ProjectManager
 project_parameters:
+  name: "Encoders"
   load_precomputed_mmd: True
   dump_results: True
   delete_existing_results: False

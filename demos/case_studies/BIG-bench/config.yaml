@@ -5,9 +5,10 @@ paths:
 
 # Parameters for the ProjectManager
 project_parameters:
-  load_precomputed_mmd: False
+  name: "BIG-bench"
+  load_precomputed_mmd: True
   dump_results: True
-  delete_existing_results: True
+  delete_existing_results: False
   verbose: True
 
 # Parameters for the generalizability study:
