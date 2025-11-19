@@ -380,7 +380,7 @@ class RankingKernel(base.Kernel):
                                 method: Literal["auto", "naive", "vectorized", "embedding", "approximation"] = "auto",
                                 **mmd_distribution_parms) -> pd.DataFrame:
         mmds = {
-            n: self.mmd_distribution(sample=sample, n=n, seed=int(np.exp(seed)) * n, disjoint=disjoint, replace=replace,
+            n: self.mmd_distribution(sample=sample, n=n, seed=seed * n, disjoint=disjoint, replace=replace,
                                      method=method, **mmd_distribution_parms)
             for n in range(nmin, nmax, step)}
 
