@@ -46,6 +46,7 @@ class ProjectManager:
         self.is_project_manager = is_project_manager
         self.demo_dir = Path(demo_dir)
         self.config_yaml_path = self.demo_dir / config_yaml_path
+        self.project_name = None
         self.load_precomputed_mmd = None
         self.dump_results = None
         self.delete_existing_results = None
@@ -156,6 +157,7 @@ class ProjectManager:
         self.approx_mmd_dir = self.outputs_dir / "MMD_approximated_icdf_coefficients"
 
     def _set_project_parameters(self, general_cfg: dict):
+        self.project_name = general_cfg["name"]
         self.delete_existing_results = general_cfg["delete_existing_results"]
         self.load_precomputed_mmd = general_cfg["load_precomputed_mmd"]
         self.dump_results = general_cfg["dump_results"]
@@ -537,8 +539,7 @@ class ProjectManager:
                 f"Skipping nstar prediction and setting nstar=1.")
 
         out = []
-        for alpha, group in dfq.groupby("alpha").groups.items():
-            dftmp = dfq.iloc[group]
+        for alpha, dftmp in dfq.groupby("alpha"):
             if (dftmp["q_alpha"] == 0.0).any():
                 b0 = b1 = 0
             else:
@@ -893,11 +894,11 @@ class PlotManager(ProjectManager):
                                'N': r"$N$", 'nstar_absrel_error': "relative error", 'aq': r"$\varepsilon$",
                                'n': r"$n$"}  # columns
 
-        self.pretty_kernels = {"borda_kernel_idx_OHE": r"$\kappa_b^{\text{OHE}, 1/n}$",
-                               "mallows_kernel_nu_auto": r"$\kappa_m^{1/\binom{n}{2}}$",
-                               "jaccard_kernel_k_1": r"$\kappa_j^{1}$"}  # kernels
-        self.pretty_kernels.update({"borda_kernel_idx_OHE": "$g_1$", "mallows_kernel_nu_auto": "$g_3$",
-                                    "jaccard_kernel_k_1": "$g_2$"})  # rename to goal_1, 2, 3
+        # self.pretty_kernels = {"borda_kernel_idx_OHE": r"$\kappa_b^{\text{OHE}, 1/n}$",
+        #                        "mallows_kernel_nu_auto": r"$\kappa_m^{1/\binom{n}{2}}$",
+        #                        "jaccard_kernel_k_1": r"$\kappa_j^{1}$"}  # kernels
+        # self.pretty_kernels.update({"borda_kernel_idx_OHE": "$g_1$", "mallows_kernel_nu_auto": "$g_3$",
+        #                             "jaccard_kernel_k_1": "$g_2$"})  # rename to goal_1, 2, 3
 
         self.boxplot_args = dict(
             showfliers=False, palette="cubehelix",
@@ -953,13 +954,13 @@ class PlotManager(ProjectManager):
         plt.subplots_adjust(wspace=.12, top=0.86)
 
         fig.legend(handles=handles, labels=labels, bbox_to_anchor=(0, 0.82 + 0.02, 1, 0.2),
-                   loc="upper left", mode="expand", borderaxespad=1, ncol=5, frameon=False)
+                   loc="center", borderaxespad=1, ncol=dfplot.nunique()["kernel_latex"], frameon=False)
 
         ax.set_yscale("log")
 
         sns.despine(right=True, top=True)
         if self.save:
-            plt.savefig(self.figures_dir / "encoders_nstar_alpha_delta.pdf")
+            plt.savefig(self.figures_dir / f"{self.project_name}_nstar_alpha_delta.pdf")
         if self.show:
             plt.show()
 
@@ -984,27 +985,32 @@ class PlotManager(ProjectManager):
         if close_other_plots:
             plt.close("all")
 
-        numN = self.dfmmd.nunique()["N"]
-
         kernels = kernels if kernels is not None else self.kernels
         for kernel_obj in kernels:
 
             eps = kernel_obj.get_eps(delta, na=self.na)
 
-            fig, axes = plt.subplots(3, numN, figsize=(fig_width, 0.7 * fig_width), sharex=False, sharey="row",
-                                     layout="constrained",
-                                     height_ratios=[7, 7, 1])
-
             padding = 0.8
             xmin = eps * padding
             xmax = max(eps, self.dfmmd["mmd"].max()) / padding
 
-            for icol, Ncol in enumerate(self.dfmmd["N"].unique()):
+            query_str = self._get_query_string_from_configuration(configuration)
+            dfmmd_configuration = self.dfmmd.query(query_str)
+            if len(dfmmd_configuration.index) == 0:
+                raise ValueError(f"Configuration {configuration} is not a valid configuration."
+                                 f"To see the valid configurations: self.dfmmd.groupby(self.configuration_factors).groups")
+            dfmmd_kernel = dfmmd_configuration.query("kernel == @kernel_obj.__str__()")
+            if len(dfmmd_kernel.index) == 0:
+                raise ValueError(f"Kernel {kernel_obj} is not a valid kernel for configuration {configuration}."
+                                 f"To see the valid kernels: self.dfmmd.query(self._get_query_string_from_configuration(configuration))['kernels'].unique()")
 
-                query_str = self._get_query_string_from_configuration(configuration)
+            fig, axes = plt.subplots(3, dfmmd_kernel.nunique()["N"], figsize=(fig_width, 0.7 * fig_width), sharex=False, sharey="row",
+                                     layout="constrained",
+                                     height_ratios=[7, 7, 1])
 
-                dfplot = (self.dfmmd.query(query_str)
-                          .query("kernel == @kernel_obj.__str__()").query("N == @Ncol"))
+            for icol, Ncol in enumerate(dfmmd_kernel["N"].unique()):
+
+                dfplot = dfmmd_kernel.query("N == @Ncol")
 
                 dfq = (dfplot.groupby("n")["mmd"].quantile(self.config_params["alpha"], interpolation="higher")
                        .rename("q_alpha").rename_axis(index=["n", "alpha"]).reset_index())
@@ -1056,16 +1062,19 @@ class PlotManager(ProjectManager):
                 # Linear regression
                 X = np.log(dfaq[self.pretty_columns["aq"]]).to_numpy().reshape(-1, 1)
                 y = np.log(dfaq[self.pretty_columns["n"]]).to_numpy().reshape(-1, 1)
-
                 epss = np.linspace(xmin, xmax, 1000)
-                lr = LinearRegression()
-                lr.fit(X, y)
-                ns_pred = np.exp(lr.predict(np.log(epss).reshape(-1, 1)).reshape(1, -1)[0])
-                nstar = int(ns_pred[np.argmin(np.abs(epss - eps))])
+                try:
+                    lr = LinearRegression()
+                    lr.fit(X, y)
+                    ns_pred = np.exp(lr.predict(np.log(epss).reshape(-1, 1)).reshape(1, -1)[0])
+                    nstar = int(ns_pred[np.argmin(np.abs(epss - eps))])
 
-                ax.plot(epss, ns_pred, color="maroon", ls=":", alpha=0.7)
-                ax.plot(eps, nstar, marker='*', color='maroon', markersize=7)
-                ax.text(eps * 1.5, 1.5 * nstar, rf"$n^*_{{{Ncol}}}$", color="maroon")
+                    ax.plot(epss, ns_pred, color="maroon", ls=":", alpha=0.7)
+                    ax.plot(eps, nstar, marker='*', color='maroon', markersize=7)
+                    ax.text(eps * 1.5, 1.5 * nstar, rf"$n^*_{{{Ncol}}}$", color="maroon")
+                except ValueError:
+                    if self.verbose:
+                        print(f"[WARNING] Failed linear regression for configuration: {dict2str(configuration)} and N: {Ncol}. Shape of X, y: {X.shape}, {y.shape}.")
 
                 # Quantile lines
                 # for (n, aq), color in zip(alpha_quantiles.items(), sns.color_palette(palette, n_colors=len(alpha_quantiles))):
@@ -1089,7 +1098,7 @@ class PlotManager(ProjectManager):
             sns.despine(top=True, right=True)
 
             if self.save:
-                plt.savefig(self.figures_dir / f"simulated_study__kernel={kernel_obj}.pdf")
+                plt.savefig(self.figures_dir / f"{self.project_name}_simulated_study__kernel={kernel_obj}.pdf")
             if self.show:
                 plt.show()
 
