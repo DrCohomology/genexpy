@@ -357,6 +357,10 @@ class UniformDistribution(ProbabilityDistribution):
         return ru.SampleAM.from_rank_vector_matrix(
             self.rng.permuted(np.tile(np.arange(self.na), n).reshape(n, self.na), axis=1).T)
 
+    def latex_str(self):
+        return rf"$U_{{{self.na}}}$"
+
+
 class DegenerateDistribution(ProbabilityDistribution):
     """
     Degenerate distribution concentrated on a single ranking.
