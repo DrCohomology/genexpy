@@ -1,6 +1,5 @@
 # genexpy: Generalizability of experimental studies
 
-
 genexpy is a Python module for the analysis of experimental results. 
 Among the rest, it implements:
 - **Ranking:** definition, samples, multisamples (samples of samples).
@@ -25,7 +24,9 @@ where $\varepsilon$ is a user-defined dissimilarity threshold and $d$ is a dista
 
 genexpy requires Python >= 3.13, although it is likely to work with Python >= 3.10.
 
-The latest release (and relevant dependencies) can be installed from PyPI (**not anonymous**):
+## Standard installation ⚠️ **not anonymous**
+
+The latest release (and relevant dependencies) can be installed from PyPI:
 ```bash
 pip install genexpy
 ```
