@@ -249,3 +249,6 @@ fabric.properties
 /deprecated/Template_test_new_features/
 /deprecated/
 /demos/synthetic_data/significance/significance.py
+/demos/synthetic_data/mmd_approximation_nm/
+/demos/synthetic_data/mmd_approximation/
+/demos/synthetic_data/mmd_level_curves/
