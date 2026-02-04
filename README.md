@@ -25,7 +25,7 @@ where $\varepsilon$ is a user-defined dissimilarity threshold and $d$ is a dista
 
 genexpy requires Python >= 3.13, although it is likely to work with Python >= 3.10.
 
-The latest release (and relevant dependencies) can be installed from PyPI:
+The latest release (and relevant dependencies) can be installed from PyPI (**not anonymous**):
 ```bash
 pip install genexpy
 ```
