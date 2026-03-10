@@ -143,7 +143,7 @@ class RankingKernel(base.Kernel):
     def gram_matrix(self, sample, *args) -> np.ndarray[float]:
         try:
             x = self._convert_sample_to_input_format(sample)
-            return self._gram_matrix_vectorized(x, *args)
+            return self._gram_matrix_vectorized(x)
         except NotImplementedError:
             return self._gram_matrix_naive(*args)
 
@@ -180,7 +180,7 @@ class RankingKernel(base.Kernel):
 
         # Input checks
         if np.not_equal(na, np.sqrt(len(s[0]))):
-            raise ValueError(f"The first MultiSample has invalid dimension: the length of s[0] is "
+            raise ValueError(f"The first SampleAM has invalid dimension: the length of s[0] is "
                              f"{np.sqrt(len(s[0]))} and should be the square of "
                              f"the number of alternatives, but is not a perfect square.")
 
@@ -398,7 +398,7 @@ class BordaKernel(RankingKernel):
     vectorized_input_format = "vector"
 
     def __init__(self, idx: int = None, alternative: str = None, nu: Union[float, Literal["auto"]] = "auto",
-                 na: int = None, ordered_alternatives: np.array = None, **kwargs) -> None:
+                 na: int = None, ordered_alternatives: np.ndarray = None, **kwargs) -> None:
         """
         If nu is auto, you need na. if idx is None, you need ordered_alternatives.
 
