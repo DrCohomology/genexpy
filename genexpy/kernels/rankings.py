@@ -143,7 +143,7 @@ class RankingKernel(base.Kernel):
     def gram_matrix(self, sample, *args) -> np.ndarray[float]:
         try:
             x = self._convert_sample_to_input_format(sample)
-            return self._gram_matrix_vectorized(x)
+            return self._gram_matrix_vectorized(x, x)
         except NotImplementedError:
             return self._gram_matrix_naive(*args)
 
@@ -434,7 +434,7 @@ class BordaKernel(RankingKernel):
         return f"BordaKernel(nu={self.nu:.2f}, idx={self.idx})"
 
     def latex_str(self):
-        return fr"$\kappa_b^{{\nu={self.nu:.2f}, a^*={self.idx}}}$"
+        return fr"$k_\text{{b}}^{{\nu={self.nu:.2f}, a^*={self.idx}}}$"
 
     def get_eps(self, delta, na: int = None):
         if self.nu == "auto":
@@ -470,9 +470,9 @@ class BordaKernel(RankingKernel):
 
     def _set_parameters(self, na: int = None, ordered_alternatives: np.array = None):
         if self.nu == "auto":
-            if na is None:
-                raise ValueError("If nu == 'auto', parameter na has to be passed.")
-            self.nu = 1 / na
+            if na is None or na <= 1:
+                raise ValueError("If nu == 'auto', parameter na >= 2 has to be passed.")
+            self.nu = 1 / (na - 1)
 
         if self.idx is None and self.alternative is not None:
             if ordered_alternatives is None:
@@ -545,9 +545,9 @@ class BordaKernel(RankingKernel):
 class JaccardKernel(RankingKernel):
     vectorized_input_format = "vector"
 
-    def __init__(self, k: int, **kwargs) -> None:
+    def __init__(self, t: int, **kwargs) -> None:
         super().__init__()
-        self.k = k
+        self.t = t
         self._validate_parameters()
 
         self._gram_matrix_vectorized = np.vectorize(self._gram_matrix_scalar,
@@ -555,14 +555,14 @@ class JaccardKernel(RankingKernel):
                                                     excluded="self")
 
     def __repr__(self):
-        return f"JaccardKernel(k={self.k})"
+        return f"JaccardKernel(t={self.t})"
 
     def get_eps(self, delta, na: int = None):
         return np.sqrt(2 * (1 - (1 - delta)))
 
     def _validate_parameters(self):
-        if not isinstance(self.k, int):
-            raise ValueError(f"Invalid value for parameter k={self.k}. Accepted: int")
+        if not isinstance(self.t, int):
+            raise ValueError(f"Invalid value for parameter t={self.t}. Accepted: int")
 
     def _bytes(self, b1: RankByte, b2: RankByte) -> float:
         """
@@ -570,8 +570,8 @@ class JaccardKernel(RankingKernel):
         """
         na = int(np.sqrt(len(b1)))
 
-        topk1 = np.where(np.frombuffer(b1, dtype=np.int8).reshape((na, na)).sum(axis=1) > na - self.k)[0]
-        topk2 = np.where(np.frombuffer(b2, dtype=np.int8).reshape((na, na)).sum(axis=1) > na - self.k)[0]
+        topk1 = np.where(np.frombuffer(b1, dtype=np.int8).reshape((na, na)).sum(axis=1) > na - self.t)[0]
+        topk2 = np.where(np.frombuffer(b2, dtype=np.int8).reshape((na, na)).sum(axis=1) > na - self.t)[0]
 
         return len(set(topk1).intersection(set(topk2))) / len(set(topk1).union(set(topk2)))
 
@@ -579,8 +579,8 @@ class JaccardKernel(RankingKernel):
         """
         Supports tied rankings as columns of the output from SampleAM.to_rank_vector_matrix().
         """
-        topk1 = np.where(r1 < self.k)[0]
-        topk2 = np.where(r2 < self.k)[0]
+        topk1 = np.where(r1 < self.t)[0]
+        topk2 = np.where(r2 < self.t)[0]
 
         return len(set(topk1).intersection(set(topk2))) / len(set(topk1).union(set(topk2)))
 
@@ -626,14 +626,14 @@ class JaccardKernel(RankingKernel):
         self._validate_vectorized_inputs_rv(rv1, rv2)
         # self.set_parameters(na=rv1.shape[0])
 
-        k1 = rv1 < self.k
-        k2 = rv2 < self.k
+        k1 = rv1 < self.t
+        k2 = rv2 < self.t
         intersection = np.logical_and(np.expand_dims(k1, 2), np.expand_dims(k2, 1)).astype(int).sum(axis=0)
         union = np.logical_or(np.expand_dims(k1, 2), np.expand_dims(k2, 1)).astype(int).sum(axis=0)
         return intersection / union
 
     def latex_str(self):
-        return fr"$\kappa_j^{{k={self.k}}}$"
+        return fr"$k_\text{{j}}^{{t={self.t}}}$"
 
 
 class MallowsKernel(RankingKernel):
@@ -672,9 +672,9 @@ class MallowsKernel(RankingKernel):
 
     def _set_parameters(self, na):
         if self.nu == "auto":
-            if na is None:
-                raise ValueError("If nu == 'auto', parameter na has to be passed.")
-            self.nu = 2 / (na * (na - 1))
+            if na is None or na <= 1:
+                raise ValueError("If nu == 'auto', parameter na >= 2 has to be passed.")
+            self.nu = 1 / (na * (na - 1))
 
     def _bytes(self, b1: RankByte, b2: RankByte) -> float:
         i1 = np.frombuffer(b1, dtype=np.int8)
@@ -741,4 +741,4 @@ class MallowsKernel(RankingKernel):
         return np.exp(-self.nu / 2 * ndisc)
 
     def latex_str(self):
-        return fr"$\kappa_m^{{\nu={self.nu:.2f}}}$"
+        return fr"$k_\text{{m}}^{{\nu={self.nu:.2f}}}$"

@@ -11,15 +11,15 @@ project_parameters:
   delete_existing_results: False
   verbose: True
 
-# Parameters for the generalizability study:
-  # alpha specifies the desired level of generalizability;
+# Parameters for the reliability study:
+  # alpha specifies the desired level of reliability;
   # delta is used to set a condition on the minimum desired value of the kernel
     # borda: max difference in relative position of 'idx' for two rankings to be similar
     # jaccard: minimum intersection over union between top-k tiers for two rankings to be similar
     # mallows: max fraction of discordant pairs for two rankings to be similar
   # seed is hte random seed passed to np.random.default_rng
   # rep is the number of pairs of subsamples used to estimate the distribution of the MMD
-# The other defining parameter for a generalizability analysis, delta, is defined for every kernel differently,
+# The other defining parameter for a reliability analysis, delta, is defined for every kernel differently,
 # as it has different interpretations (see below).
 parameters:
   alpha:
@@ -41,12 +41,16 @@ parameters:
     # the dataset is stored in dataset_path. Its primary key consists of the experimental factors + alternatives.
     # All columns of the dataset whose name is not entered here will be ignored in the analysis.
 
-  # An experimental factor is a variable that influences the outcome of an experiment. We distinguish three kinds:
-    # held-constant factors: fixed to a specified level.
-      # factor_name: level_name
-    # design factors: an independent generalizability analysis for every combination of levels of design factors
-      # factor_name: "_all"
-    # generalizability the factor for which we want to draw generalizable conclusions.
+  # An experimental factor is a variable influencing the outcome of an experiment. Here, it's a column of 'dataset'.
+  # We distinguish between "fixed" and "random" factors. Fixed factors define configurations, and an independent
+    # reliability analysis is performed for every configuration. Random factors are those factors for which we want
+    # results to be reliable.
+  # Distinguish factors in the following way:
+    # fixed factors
+      # factor_name: level_name --- to only select that specific level
+      # OR
+      # factor_name: "_all" --- to loop over all levels
+    # random factors
       # factor_name: null
 
   # target: the name of the column, the alternatives are ranked according to it.
@@ -67,14 +71,14 @@ data:
 
 # Parameteres controlling the iid sampling from valid experimental conditions, to approximate the
 # true distribution of results and compute the MMD between pairs of studies.
-# disjoint and replace are ignored if the method passed to pm.generalizability_analysis is "approximation"
+# disjoint and replace are ignored if the method passed to pm.reliability_analysis is "approximation"
   # sample_size: increment in sample size N
   # disjoint: if True, compute MMD on two disjoint samples of experimental conditions
   # replace: if True, compute MMD on two samples of experimental conditions, with replacement
 # We interpret combinations of disjoint and replace as follows:
-  # disjoint = true, replace = true: pessimistic setting, MMD is biased upwardly and generalizability downwardly
+  # disjoint = true, replace = true: pessimistic setting, MMD is biased upwardly and reliability downwardly
   # disjoint = true, replace = false: realistic setting, no duplicate conditions
-  # disjoint = false, replace = false: optimistic setting, MMD is biased downwardly and generalizability upwardly
+  # disjoint = false, replace = false: optimistic setting, MMD is biased downwardly and reliability upwardly
   # disjoint = false, replace = true: --- setting, without clear biases
 sampling:
   sample_size: 10
@@ -113,7 +117,7 @@ kernels:
 
   - name: "JaccardKernel"
     params:
-      k:                          # number of top tiers considered
+      t:                          # number of top tiers considered
         - 1
 
   - name: "MallowsKernel"
