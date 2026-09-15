@@ -1,4 +1,4 @@
-# genexpy: Generalizability of experimental studies
+# genexpy: reliability of experimental studies
 
 genexpy is a Python module for the analysis of experimental results. 
 Among the rest, it implements:
@@ -6,14 +6,14 @@ Among the rest, it implements:
 - **Probability distributions (PDs) over rankings:** sampling, multisampling.
 - **Kernels for rankings:** Borda, Jaccard, and Mallows kernels.
 - **Maximum Mean Discrepancy (MMD):** for PDs over rankings and numerical data.
-- **Generalizability analysis of experimental results:** based on the MMD.
+- **reliability analysis of experimental results:** based on the MMD.
 
 Demos for the usage of genexpy are in ``genexpy/demos``.
 
-# Generalizability
+# reliability
 
-genexpy is based on the theoretical machinery described in the paper [Generalizability of Experimental Studies]().
-In short, if an experimental study $S$ yields results with a distribution $\mathbb P$, its $n$-generalizability is the probability
+genexpy is based on the theoretical machinery described in the paper [reliability of Experimental Studies]().
+In short, if an experimental study $S$ yields results with a distribution $\mathbb P$, its $n$-reliability is the probability
 that two independent realizations yield similar results:
 $$
 n\text{-Gen}(S, \varepsilon) = \text{Pr}_{X, Y \sim \mathbb P^n} (d(X, Y) \leq \varepsilon), 

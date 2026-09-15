@@ -70,7 +70,7 @@ class ProjectManager:
         # --- Factors ---
         self.all_factors: list = []
         self.design_factors: list = []
-        self.generalizability_factors: list = []
+        self.reliability_factors: list = []
         self.held_constant_factors: list = []
         self.configuration_factors: list = []  # design + held-constant factors
 
@@ -94,8 +94,8 @@ class ProjectManager:
 
         # --- Flags for experimental factors ---
         self.flag_design_factor = "_all"
-        self.flag_held_constant_factor = None  # HC factors are those that are neither generalizability nor design
-        self.flag_generalizability_factor = None
+        self.flag_held_constant_factor = None  # HC factors are those that are neither reliability nor design
+        self.flag_reliability_factor = None
 
         # --- Initialization steps ---
         self._load_config_file()
@@ -206,7 +206,7 @@ class ProjectManager:
                 [
                     factor
                     for factor, lvl in self.config_data["experimental_factors_name_lvl"].items()
-                    if lvl != self.flag_generalizability_factor
+                    if lvl != self.flag_reliability_factor
                 ]
             ).groups
         except ValueError:
@@ -218,13 +218,13 @@ class ProjectManager:
             f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
             if lvl == self.flag_design_factor
         ]
-        self.generalizability_factors = [
+        self.reliability_factors = [
             f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
-            if lvl == self.flag_generalizability_factor
+            if lvl == self.flag_reliability_factor
         ]
         self.held_constant_factors = [
             f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
-            if lvl not in [self.flag_design_factor, self.flag_generalizability_factor]
+            if lvl not in [self.flag_design_factor, self.flag_reliability_factor]
         ]
         self.configuration_factors = self.design_factors + self.held_constant_factors
 
@@ -340,9 +340,13 @@ class ProjectManager:
             print(f"[INFO] Loaded precomputed MMD for {len(self.precomputed_configurations)} configurations, "
                   f"{len(self.precomputed_kernels)} kernels, and {len(self.precomputed_Ns)} values of N.")
 
-        self.dfmmd.to_parquet(self.outputs_dir / "preloaded_mmd.parquet")
-        if verbose:
-            print(f"[INFO] Dumped preloaded MMD dataframe in {self.outputs_dir / "preloaded_mmd.parquet"}")
+        try:
+            self.dfmmd.to_parquet(self.outputs_dir / "preloaded_mmd.parquet")
+        except AttributeError:
+            pass
+        else:
+            if verbose:
+                print(f"[INFO] Dumped preloaded MMD dataframe in {self.outputs_dir / "preloaded_mmd.parquet"}")
 
     def _load_preloaded_mmd_icdf(self):
         try:
@@ -430,7 +434,7 @@ class ProjectManager:
 
     def _dump_nstar_df(self):
         if self.df_nstar is None:
-            warnings.warn("No df_nstar to dump. Run generalizability_analysis first to initialize it.")
+            warnings.warn("No df_nstar to dump. Run reliability_analysis first to initialize it.")
             return
 
         match self.df_format:
@@ -546,11 +550,9 @@ class ProjectManager:
                 logq = np.log(dftmp["q_alpha"].values.reshape(-1, 1))
                 logn = np.log(dftmp["n"].values.reshape(-1, 1))
 
-                # logn = b1 * logq + b0
-                lr = LinearRegression()
-                lr.fit(logq, logn)
-                b1 = lr.coef_[0, 0]
-                b0 = lr.intercept_[0]
+                # logn = -2 * logq + b0
+                b1 = -2
+                b0 = np.mean(logn - b1 * logq)
 
             for delta in self.config_params["delta"]:
                 eps = kernel_obj.get_eps(delta, na=self.na)
@@ -668,7 +670,7 @@ class ProjectManager:
 
         Literature
         ----------
-        Matteucci et al. (2025): Matteucci, Federico, et al. "Generalizability of experimental studies." arXiv preprint arXiv:2406.17374 (2024).
+        Matteucci et al. (2025): Matteucci, Federico, et al. "reliability of experimental studies." arXiv preprint arXiv:2406.17374 (2024).
         Lin (1989): Lin, Jinn‐Tyan. "Approximating the normal tail probability and its inverse for use on a pocket calculator." Journal of the Royal Statistical Society: Series C (Applied Statistics) 38.1 (1989): 69-70.
         Choudhury (2007) : Choudhury, Amit, Subhasis Ray, and Pradipta Sarkar. "Approximating the cumulative distribution function of the normal distribution." Journal of Statistical Research 41.1 (2007): 59-67.
         """
@@ -765,7 +767,7 @@ class ProjectManager:
 
         return out.extend(tmp) or out
 
-    def _generalizability_analysis_one_configuration(self, sample_rankings: ru.SampleAM,
+    def _reliability_analysis_one_configuration(self, sample_rankings: ru.SampleAM,
                                                      sample_vectors: np.ndarray[float], out: List = None,
                                                      configuration: dict = None):
 
@@ -794,7 +796,7 @@ class ProjectManager:
 
         return out
 
-    def generalizability_analysis(self):
+    def reliability_analysis(self):
 
         self.results_rankings = ru.get_matrix_from_df(self.results, factors=list(self.all_factors),
                                                       alternatives=self.config_data["alternatives_col_name"],
@@ -819,7 +821,7 @@ class ProjectManager:
             na_tmp = self.results.nunique()[self.config_data['alternatives_col_name']]
             print(f"[INFO] Kept {self.results_rankings.shape[0]} / {na_tmp} indices (alternatives) and "
                   f"{self.results_rankings.shape[1]} / {len(self.results.groupby(self.all_factors))} columns (conditions).")
-            print(f"[INFO] Starting the generalizability analysis.")
+            print(f"[INFO] Starting the reliability analysis.")
 
         if self.verbose:
             iterator = tqdm(self._get_configurations_and_grouped_df(),
@@ -837,7 +839,7 @@ class ProjectManager:
             sample_rankings = ru.SampleAM.from_rank_vector_matrix(rankings.values)
             sample_vectors = self.results_matrix.loc[:, mask.values].values
 
-            out = self._generalizability_analysis_one_configuration(sample_rankings=sample_rankings,
+            out = self._reliability_analysis_one_configuration(sample_rankings=sample_rankings,
                                                                     sample_vectors=sample_vectors, out=out,
                                                                     configuration=configuration)
 
@@ -878,7 +880,7 @@ class PlotManager(ProjectManager):
             lambda x: Kernel.from_string(x).latex_str())
 
     def _load_preconfigured_plotting_parameters(self):
-        sns.set(style="ticks", context="paper", font="times new roman")
+        sns.set(style="ticks", context="paper", font="times new roman", font_scale=1.5)
 
         # mpl.use("TkAgg")
         mpl.rcParams['text.usetex'] = True
@@ -889,8 +891,8 @@ class PlotManager(ProjectManager):
         mpl.rc('font', family='Times New Roman')
 
         # pretty names
-        self.pretty_columns = {"alpha": r"$\alpha^*$", 'eps': r"$\varepsilon^*$", 'nstar': r"$n^*$",
-                               'delta': r"$\delta^*$",
+        self.pretty_columns = {"alpha": r"$\alpha$", 'eps': r"$\varepsilon$", 'nstar': r"$n^*$",
+                               'delta': r"$\delta$",
                                'N': r"$N$", 'nstar_absrel_error': "relative error", 'aq': r"$\varepsilon$",
                                'n': r"$n$"}  # columns
 
@@ -1021,7 +1023,7 @@ class PlotManager(ProjectManager):
                 dfaq = pd.DataFrame(alpha_quantiles, index=[0]).melt(var_name="n", value_name="aq").rename(
                     columns=self.pretty_columns)
 
-                # -- Generalizability (MMD cdf)
+                # -- reliability (MMD cdf)
                 ax = axes[0, icol]
 
                 ax.set_title(f"$N = {Ncol}$")
@@ -1032,7 +1034,7 @@ class PlotManager(ProjectManager):
                 ax.axvline(eps, **self.axlines_args)
 
                 if icol == 0:
-                    ax.set_ylabel(r"$n$-Gen / $F_{\text{MMD}_n}$")
+                    ax.set_ylabel(r"$\text{R}^k_n(\hat P_N, \varepsilon)$")
 
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning)
@@ -1064,14 +1066,21 @@ class PlotManager(ProjectManager):
                 y = np.log(dfaq[self.pretty_columns["n"]]).to_numpy().reshape(-1, 1)
                 epss = np.linspace(xmin, xmax, 1000)
                 try:
-                    lr = LinearRegression()
-                    lr.fit(X, y)
-                    ns_pred = np.exp(lr.predict(np.log(epss).reshape(-1, 1)).reshape(1, -1)[0])
-                    nstar = int(ns_pred[np.argmin(np.abs(epss - eps))])
+                    # logn = -2 * logq + b0
+                    b1 = -2
+                    b0 = np.mean(y - b1 * X)
+
+                    ns_pred = np.exp(b1 * np.log(epss) + b0)
+                    nstar = int(np.exp(b1 * np.log(eps) + b0))
+
+                    # lr = LinearRegression()
+                    # lr.fit(X, y)
+                    # ns_pred = np.exp(lr.predict(np.log(epss).reshape(-1, 1)).reshape(1, -1)[0])
+                    # nstar = int(ns_pred[np.argmin(np.abs(epss - eps))])
 
                     ax.plot(epss, ns_pred, color="maroon", ls=":", alpha=0.7)
                     ax.plot(eps, nstar, marker='*', color='maroon', markersize=7)
-                    ax.text(eps * 1.5, 1.5 * nstar, rf"$n^*_{{{Ncol}}}$", color="maroon")
+                    ax.text(eps * 1.2, 1.2 * nstar, rf"$n^*_{{{Ncol}}} = {nstar}$", color="maroon")
                 except ValueError:
                     if self.verbose:
                         print(f"[WARNING] Failed linear regression for configuration: {dict2str(configuration)} and N: {Ncol}. Shape of X, y: {X.shape}, {y.shape}.")
@@ -1085,6 +1094,10 @@ class PlotManager(ProjectManager):
                 # Turn off unnecessary axes (they're here to be replaced by the colormap)
                 ax = axes[2, icol]
                 ax.axis("off")
+
+                # Clean after seaborn
+                ax.set_xlabel("")
+                ax.set_xticklabels([])
 
                 # Add colormap
                 if Ncol == self.dfmmd["N"].max():
@@ -1191,4 +1204,4 @@ if __name__ == "__main__()":
     import os
 
     pm = ProjectManager(config_yaml_path="config.yaml", demo_dir=os.getcwd())
-    df_nstar = pm.generalizability_analysis()
+    df_nstar = pm.reliability_analysis()

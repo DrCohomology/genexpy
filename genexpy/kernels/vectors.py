@@ -234,7 +234,7 @@ class RBFKernel(VectorKernel):
         return f"RBFKernel(gamma={self.gamma:.2f})"
 
     def latex_str(self):
-        return fr"$\kappa_\text{{RBF}}^{{\gamma={self.gamma:.2f}}}$"
+        return fr"$k_\text{{RBF}}^{{\gamma={self.gamma:.2f}}}$"
 
     def get_eps(self, delta, na: int = None):
         if self.gamma == "auto":
