@@ -652,6 +652,86 @@ class MultiSampleAM(np.ndarray):
         """
         return np.array([[AdjacencyMatrix.from_bytes(r, shape=(na, na)) for r in sample] for sample in self])    # (rep, n, na, na)
 
+    def get_pmfs(self, support: UniverseAM) -> np.ndarray:
+        """
+        Empirical pmf of every sample in the multi-sample, over a common support.
+
+        Parameters
+        ----------
+        support : UniverseAM
+            The rankings indexing the output, in the order they are to appear.
+            Must contain every ranking occurring in the multi-sample, and must
+            not contain duplicates.
+
+        Returns
+        -------
+        np.ndarray
+            A 2D array of shape (rep, m), row r holding the pmf of sample r over
+            `support`, where rep is the number of samples and m is the size of
+            the support.
+
+        Raises
+        ------
+        ValueError
+            If a ranking in the multi-sample is absent from `support`.
+        """
+        a = np.asarray(self)
+        rep, n = a.shape
+        index = pd.Index(np.asarray(support))  # raises if the support has duplicates
+        m = len(index)
+
+        codes = index.get_indexer(a.ravel())  # -1 where absent
+        if codes.min() < 0:
+            raise ValueError("There are rankings in the sample that are not contained in the support.")
+
+        # offsetting sample r by r * m gives every sample a disjoint block of the
+        # count vector, so one bincount fills the whole (rep, m) array
+        offset = m * np.arange(rep, dtype=np.int64)[:, None]
+        flat = (codes.reshape(rep, n) + offset).ravel()
+
+        return np.bincount(flat, minlength=rep * m).reshape(rep, m) / n
+
+    def get_alpha(self, other: "MultiSampleAM", support: UniverseAM = None) -> tuple[np.ndarray, UniverseAM]:
+        """
+        Signed difference of the empirical pmfs of two multi-samples.
+
+        Column r of the output is the coefficient vector of the difference of
+        kernel mean embeddings of self[r] and other[r], so that the squared MMD
+        between them is alpha[:, r] @ K @ alpha[:, r], with K the Gram matrix of
+        the returned support.
+
+        Parameters
+        ----------
+        other : MultiSampleAM
+            A multi-sample with the same number of samples as self. self[r] is
+            compared with other[r].
+        support : UniverseAM, optional
+            The rankings indexing the output. If None, the union of the two
+            multi-samples is used, ordered by first appearance.
+
+        Returns
+        -------
+        alpha : np.ndarray
+            A 2D array of shape (m, rep).
+        support : UniverseAM
+            The support indexing the rows of alpha. The Gram matrix must be
+            built on this, not on an independently computed support.
+
+        Raises
+        ------
+        ValueError
+            If the two multi-samples have different numbers of samples, or if a
+            ranking is absent from a `support` that was passed explicitly.
+        """
+        if self.shape[0] != other.shape[0]:
+            raise ValueError(f"The multi-samples hold {self.shape[0]} and {other.shape[0]} samples.")
+
+        if support is None:
+            support = SampleAM(pd.unique(np.concatenate([np.asarray(self).ravel(),
+                                                         np.asarray(other).ravel()])))
+
+        return (self.get_pmfs(support) - other.get_pmfs(support)).T, support
+
     def get_pmfs_df(self, support: UniverseAM = None) -> pd.DataFrame:
         """
         Create a dataframe. Index: rankings. Columns: samples in 'ms'.

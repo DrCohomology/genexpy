@@ -61,6 +61,7 @@ class ProjectManager:
         self.estimation_methods = None
         self.dfmmd = None
         self.df_nstar = None
+        self.df_nstar_nested = None
         self.factors_dict = None
         self.results = None
         self.results_matrix = None
@@ -70,9 +71,9 @@ class ProjectManager:
         # --- Factors ---
         self.all_factors: list = []
         self.design_factors: list = []
-        self.reliability_factors: list = []
+        self.random_factors: list = []
         self.held_constant_factors: list = []
-        self.configuration_factors: list = []  # design + held-constant factors
+        self.fixed_factors: list = []  # design + held-constant factors
 
         # --- Configurations ---
         self.na = None
@@ -86,7 +87,7 @@ class ProjectManager:
         self.precomputed_kernels = set()
         self.precomputed_Ns = set()
         self.precomputed_mmd_filename_pattern = (
-            r"configuration=dict(\(.*?\))__kernel=([A-Za-z0-9_]+\(.*?\))__N=(\d+)"
+            r"configuration=dict(\(.*?\))__kernel=([A-Za-z0-9_]+\(.*?\))__N=(\d+)(?:__resample=(True|False))?"
         )
         self.mmd_icdf_coefficients_filename_pattern = (
             r"configuration=dict(\(.*?\))__kernel=([A-Za-z0-9_]+\(.*?\))__N=(\d+)"
@@ -95,7 +96,7 @@ class ProjectManager:
         # --- Flags for experimental factors ---
         self.flag_design_factor = "_all"
         self.flag_held_constant_factor = None  # HC factors are those that are neither reliability nor design
-        self.flag_reliability_factor = None
+        self.flag_random_factor = None
 
         # --- Initialization steps ---
         self._load_config_file()
@@ -108,7 +109,8 @@ class ProjectManager:
                 print("[INFO] Created project directories.")
 
         if self.load_precomputed_mmd:
-            self._load_precomputed_mmd_df()
+            for resample in [True, False]:
+                self._load_precomputed_mmd_df(resample=resample)
             if self.verbose:
                 print("[INFO] Loaded existing results.")
 
@@ -206,7 +208,7 @@ class ProjectManager:
                 [
                     factor
                     for factor, lvl in self.config_data["experimental_factors_name_lvl"].items()
-                    if lvl != self.flag_reliability_factor
+                    if lvl != self.flag_random_factor
                 ]
             ).groups
         except ValueError:
@@ -218,15 +220,15 @@ class ProjectManager:
             f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
             if lvl == self.flag_design_factor
         ]
-        self.reliability_factors = [
+        self.random_factors = [
             f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
-            if lvl == self.flag_reliability_factor
+            if lvl == self.flag_random_factor
         ]
         self.held_constant_factors = [
             f for f, lvl in self.config_data["experimental_factors_name_lvl"].items()
-            if lvl not in [self.flag_design_factor, self.flag_reliability_factor]
+            if lvl not in [self.flag_design_factor, self.flag_random_factor]
         ]
-        self.configuration_factors = self.design_factors + self.held_constant_factors
+        self.fixed_factors = self.design_factors + self.held_constant_factors
 
     def _load_kernels(self, kernels_cfg: list, df: pd.DataFrame):
         self.kernels = []
@@ -267,14 +269,14 @@ class ProjectManager:
 
     def get_configurations(self, df_grouped: pd.DataFrame) -> dict:
         # Check that design and held-constant factors have been filtered correctly. They should have exactly one unique values
-        if (df_grouped.nunique()[self.configuration_factors] > 1).any():
+        if (df_grouped.nunique()[self.fixed_factors] > 1).any():
             raise ValueError("Factor levels not unique after query.")
 
         # Current levels of design and held-constant factor
-        return dict(df_grouped[self.configuration_factors].iloc[0])
+        return dict(df_grouped[self.fixed_factors].iloc[0])
 
     def _get_configurations_and_grouped_df(self) -> list:
-        df_grouped_list = [x[1] for x in self.results.groupby(self.configuration_factors)]
+        df_grouped_list = [x[1] for x in self.results.groupby(self.fixed_factors)]
         configurations = [self.get_configurations(df_grouped) for df_grouped in df_grouped_list]
 
         return list(zip(configurations, df_grouped_list))
@@ -288,37 +290,50 @@ class ProjectManager:
         return query_str
 
     # ---- Routines to load and dump files
-    def _load_preloaded_mmd_df(self):
+    def _load_preloaded_mmd_df(self, resample: bool = True):
         try:
-            self.dfmmd = pd.read_parquet(self.outputs_dir / "preloaded_mmd.parquet")
-            return True
+            dfmmd = pd.read_parquet(self.outputs_dir / f"preloaded_mmd__resample={resample}.parquet")
         except FileNotFoundError:
             return False
 
-    def _load_precomputed_mmd_df(self, configuration_str: str = None, kernel_name: str = None, N: int = None,
-                                 verbose: bool = False):
+        if not (dfmmd.get("resample", pd.Series(True, index=dfmmd.index)) == resample).all():
+            warnings.warn(f"Preloaded MMD for resample={resample} does not match its flag. Reloading from files.")
+            return False
 
-        if self._load_preloaded_mmd_df():
+        self.dfmmd = dfmmd
+        return True
+
+    def _load_precomputed_mmd_df(self, configuration_str: str = None, kernel_name: str = None, N: int = None,
+                                 resample: bool = True, verbose: bool = False):
+
+        if self._load_preloaded_mmd_df(resample):
             if verbose:
                 print("[INFO] Loaded preloaded mmd dataframe.")
             return
+
+        preloaded_path = self.outputs_dir / f"preloaded_mmd__resample={resample}.parquet"
 
         dfs = []
         for filepath in self.sample_mmd_dir.glob(f"*.{self.df_format}"):
             match self.df_format:
                 case "parquet":
                     try:
-                        matched_configuration, matched_kernel, matched_N = re.search(
+                        matched_configuration, matched_kernel, matched_N, matched_resample = re.search(
                             self.precomputed_mmd_filename_pattern, str(filepath)).groups()
                     except AttributeError:
                         raise AttributeError(
                             f"File name {str(filepath)} is not in a valid pattern for the precomputed MMD files. "
                             f"The accepted patterns are {self.precomputed_mmd_filename_pattern}.")
 
+                    # files dumped before the resample field was introduced are resampled
+                    matched_resample = matched_resample if matched_resample is not None else "True"
+
                     self.precomputed_configurations.add(matched_configuration)
                     self.precomputed_kernels.add(matched_kernel)
                     self.precomputed_Ns.add(matched_N)
 
+                    if matched_resample != str(resample):
+                        continue
                     if configuration_str is not None and matched_configuration != configuration_str:
                         continue
                     if kernel_name is not None and matched_kernel != kernel_name:
@@ -330,23 +345,21 @@ class ProjectManager:
 
                 case _:
                     raise NotImplementedError()
-        try:
-            self.dfmmd = pd.concat(dfs, ignore_index=True)
-        except ValueError:
+        if not dfs:
+            self.dfmmd = None
             if verbose:
-                print(f"[INFO] No precomputed MMD to load.")
+                print(f"[INFO] No precomputed MMD to load for resample={resample}.")
+            return
+
+        self.dfmmd = pd.concat(dfs, ignore_index=True)
 
         if verbose:
             print(f"[INFO] Loaded precomputed MMD for {len(self.precomputed_configurations)} configurations, "
                   f"{len(self.precomputed_kernels)} kernels, and {len(self.precomputed_Ns)} values of N.")
 
-        try:
-            self.dfmmd.to_parquet(self.outputs_dir / "preloaded_mmd.parquet")
-        except AttributeError:
-            pass
-        else:
-            if verbose:
-                print(f"[INFO] Dumped preloaded MMD dataframe in {self.outputs_dir / "preloaded_mmd.parquet"}")
+        self.dfmmd.to_parquet(preloaded_path)
+        if verbose:
+            print(f"[INFO] Dumped preloaded MMD dataframe in {preloaded_path}")
 
     def _load_preloaded_mmd_icdf(self):
         try:
@@ -406,18 +419,27 @@ class ProjectManager:
 
         match self.df_format:
             case "parquet":
-                self.df_nstar = pd.read_parquet(self.outputs_dir / f"nstar.{self.df_format}")
+                try:
+                    self.df_nstar = pd.read_parquet(self.outputs_dir / f"nstar_resample=True.{self.df_format}")
+                except FileNotFoundError:
+                    print("[INFO] No dataframe found for resampled results.")
+                try:
+                    self.df_nstar_nested = pd.read_parquet(self.outputs_dir / f"nstar_resample=False.{self.df_format}")
+                except FileNotFoundError:
+                    print("[INFO] No dataframe found for nested (non-resampled) results.")
             case _:
                 raise NotImplementedError()
 
     def _dump_sample_mmd_df(self, df: pd.DataFrame):
         kernel_name = df.loc[0, "kernel"]
         N = df.loc[0, "N"]
+        resample = df.loc[0, "resample"]
         configuration = dict2str(self.get_configurations(df))
         match self.df_format:
             case "parquet":
                 df.to_parquet(
-                    self.sample_mmd_dir / f"mmd__configuration={configuration}__kernel={kernel_name}__N={N}.parquet")
+                    self.sample_mmd_dir / f"mmd__configuration={configuration}__kernel={kernel_name}"
+                                          f"__N={N}__resample={resample}.parquet")
             case _:
                 raise NotImplementedError()
 
@@ -432,24 +454,32 @@ class ProjectManager:
             case _:
                 raise NotImplementedError()
 
-    def _dump_nstar_df(self):
+    def _dump_nstar_df(self, resample: bool = True):
         if self.df_nstar is None:
             warnings.warn("No df_nstar to dump. Run reliability_analysis first to initialize it.")
             return
 
         match self.df_format:
             case "parquet":
-                self.df_nstar.to_parquet(self.outputs_dir / f"nstar.{self.df_format}")
+                if self.df_nstar is not None:
+                    self.df_nstar.to_parquet(self.outputs_dir / f"nstar_resample=True.{self.df_format}")
+                if self.df_nstar_nested is not None:
+                    self.df_nstar_nested.to_parquet(self.outputs_dir / f"nstar_resample=False.{self.df_format}")
             case _:
                 raise NotImplementedError()
 
         if self.verbose:
             print(f"[INFO] Predicted nstar stored in {self.outputs_dir / f'nstar.{self.df_format}'}.")
 
-    def _get_existing_precomputed_mmd(self, configuration: dict, kernel_obj: kernels.base.Kernel, N: int):
+    def _get_existing_precomputed_mmd(self, configuration: dict, kernel_obj: kernels.base.Kernel, N: int,
+                                      resample: bool = True):
         if self.dfmmd is not None:
             precomputed_mmd = self.dfmmd.loc[self.dfmmd["kernel"] == str(kernel_obj)]
             precomputed_mmd = precomputed_mmd.query("N == @N")
+            if "resample" in precomputed_mmd.columns:
+                precomputed_mmd = precomputed_mmd.query("resample == @resample")
+            elif not resample:
+                return pd.DataFrame()  # legacy files without the flag are resampled
             for factor, lvl in configuration.items():
                 precomputed_mmd = precomputed_mmd.query(f"{factor} == @lvl")
         else:
@@ -460,13 +490,15 @@ class ProjectManager:
     # ---- Routines to compute/estimate/approximate the MMD
     def _estimate_mmd_from_experiments_rankings(self, sample: ru.SampleAM, configuration: dict,
                                                 kernel_obj: kernels.rankings.RankingKernel, N: int,
-                                                method: Literal["naive", "vectorized", "embedding", "approximation"]):
+                                                method: Literal["naive", "vectorized", "embedding", "approximation"],
+                                                resample: bool = True):
 
         # Get a subsample of size N
-        distr = du.PMFDistribution.from_sample(sample)
-        sample = distr.sample(N)
+        if resample:
+            distr = du.PMFDistribution.from_sample(sample)
+            sample = distr.sample(N)
 
-        precomputed_mmd = self._get_existing_precomputed_mmd(configuration, kernel_obj, N)
+        precomputed_mmd = self._get_existing_precomputed_mmd(configuration, kernel_obj, N, resample)
 
         if not precomputed_mmd.empty:
             return precomputed_mmd
@@ -478,6 +510,7 @@ class ProjectManager:
                                                        method=method,
                                                        N=N, use_cached_support_matrix=True)
 
+            dfmmd.loc[:, "resample"] = resample
             for factor, lvl in configuration.items():
                 dfmmd.loc[:, factor] = lvl
 
@@ -486,16 +519,17 @@ class ProjectManager:
 
             return dfmmd
 
-    def _estimate_mmd__from_experiments_vectors(self, s: np.ndarray[float], configuration: dict,
+    def _estimate_mmd_from_experiments_vectors(self, s: np.ndarray[float], configuration: dict,
                                                 kernel_obj: kernels.vectors.VectorKernel, N: int,
                                                 method: Literal["naive", "embedding", "approximation"],
-                                                seed: int = None):
+                                                seed: int = None, resample: bool = True):
 
         # Get a subsample of size N
-        rng = np.random.default_rng(seed=seed)
-        s = rng.choice(s.T, size=N).T
+        if resample:
+            rng = np.random.default_rng(seed=seed)
+            s = rng.choice(s.T, size=N).T
 
-        precomputed_mmd = self._get_existing_precomputed_mmd(configuration, kernel_obj, N)
+        precomputed_mmd = self._get_existing_precomputed_mmd(configuration, kernel_obj, N, resample)
 
         if not precomputed_mmd.empty:
             return precomputed_mmd
@@ -507,6 +541,7 @@ class ProjectManager:
                                                        method=method,
                                                        N=N, use_cached_support_matrix=True)
 
+            dfmmd.loc[:, "resample"] = resample
             for factor, lvl in configuration.items():
                 dfmmd.loc[:, factor] = lvl
 
@@ -515,24 +550,25 @@ class ProjectManager:
 
         return dfmmd
 
-    def estimate_mmd(self, sample: Union[ru.SampleAM, np.ndarray[float]], configuration: dict,
-                     kernel_obj: kernels.base.Kernel, N: int,
-                     method: Literal["naive", "vectorized", "embedding", "approximation"]):
+    def estimate_mmd(self, sample, configuration, kernel_obj, N, method, resample: bool = True):
 
-        # Detect if rankings or vectors
         if isinstance(sample, ru.SampleAM) and isinstance(kernel_obj, kernels.rankings.RankingKernel):
-            return self._estimate_mmd_from_experiments_rankings(sample, configuration, kernel_obj, N, method)
+            return self._estimate_mmd_from_experiments_rankings(sample, configuration, kernel_obj, N, method, resample)
         elif isinstance(sample, np.ndarray) and isinstance(kernel_obj, kernels.vectors.VectorKernel):
-            return self._estimate_mmd__from_experiments_vectors(sample, configuration, kernel_obj, N, method)
+            return self._estimate_mmd_from_experiments_vectors(sample, configuration, kernel_obj, N, method,
+                                                                resample=resample)
         else:
             raise TypeError(f"Parameter sample with type {type(sample)} is not a valid input type.")
+
+
 
     def _estimate_nstar_from_experiments(self, sample: Union[ru.SampleAM, np.ndarray[float]],
                                          configuration: dict,
                                          kernel_obj: kernels.base.Kernel, N: int,
-                                         method: Literal["naive", "vectorized", "embedding"] = "embedding"):
+                                         method: Literal["naive", "vectorized", "embedding"] = "embedding",
+                                         resample: bool = True):
 
-        dfmmd = self.estimate_mmd(sample, configuration, kernel_obj, N, method)
+        dfmmd = self.estimate_mmd(sample, configuration, kernel_obj, N, method, resample)
 
         dfq = (dfmmd.groupby("n")["mmd"].quantile(self.config_params["alpha"], interpolation="higher")
                .rename("q_alpha").rename_axis(index=["n", "alpha"]).reset_index())
@@ -660,7 +696,7 @@ class ProjectManager:
     # --- Approximation of nstar
 
     def _estimate_nstar_from_approximation(self, sample: Union[ru.SampleAM, np.ndarray[float]], configuration: dict,
-                                           kernel_obj: kernels.base.Kernel, N: int = None):
+                                           kernel_obj: kernels.base.Kernel, N: int = None, resample:bool = True):
         """
         use the approximation of the MMD using the approximate CDF of a normal variable. Details
             in the paper Matteucci et al. (2025).
@@ -682,7 +718,7 @@ class ProjectManager:
             warnings.warn("The approximation of the MMD might not be reliable for alpha < 0.6.")
 
         if isinstance(sample, ru.SampleAM) and isinstance(kernel_obj, kernels.rankings.RankingKernel):
-            if N is not None:
+            if N is not None and resample:
                 distr = du.PMFDistribution.from_sample(sample)
                 sample = distr.sample(N)
 
@@ -692,7 +728,7 @@ class ProjectManager:
             m = len(support)
 
         elif isinstance(sample, np.ndarray) and isinstance(kernel_obj, kernels.vectors.VectorKernel):
-            if N is not None:
+            if N is not None and resample:
                 rng = np.random.default_rng(seed=4637843)
                 sample = rng.choice(sample.T, size=N).T
 
@@ -796,7 +832,55 @@ class ProjectManager:
 
         return out
 
-    def reliability_analysis(self):
+    def _reliability_analysis_one_configuration_nested(self, sample_rankings: ru.SampleAM,
+                                                       sample_vectors: np.ndarray[float], out: List = None,
+                                                       configuration: dict = None, seed: int = None):
+        """
+        As _reliability_analysis_one_configuration, but with nested subsamples: the subsample of size N + Nstep
+        keeps the N experiments already drawn and adds Nstep new ones, without replacement.
+        """
+
+        configuration = configuration if configuration is not None else dict()
+        out = out if out is not None else []
+
+        Nstep = self.config_sampling["sample_size"]
+        Nmax = int(np.nanmin((len(sample_rankings), self.config_params["Nmax"])))
+        order = np.random.default_rng(seed=seed).permutation(len(sample_rankings))
+
+        # Loop over the kernels
+        for kernel_obj in self.kernels:
+            # Set the Universe
+            kernel_obj.set_support(sample_rankings.get_support_pmf()[0])
+
+            for N in range(Nstep, Nmax, Nstep):
+                idx = order[:N]
+                if isinstance(kernel_obj, kernels.rankings.RankingKernel):
+                    for method in self.estimation_methods["rankings"]:
+                        out = self.estimate_nstar(sample=ru.SampleAM(np.asarray(sample_rankings)[idx]),
+                                                  configuration=configuration,
+                                                  kernel_obj=kernel_obj, method=method, out=out, N=N, resample=False)
+                elif isinstance(kernel_obj, kernels.vectors.VectorKernel):
+                    for method in self.estimation_methods["vectors"]:
+                        out = self.estimate_nstar(sample=sample_vectors[:, idx], configuration=configuration,
+                                                  kernel_obj=kernel_obj, method=method, out=out, N=N, resample=False)
+                else:
+                    raise TypeError(f"Parameter kernel_obj with type {type(kernel_obj)} is invalid. Valid inputs are "
+                                    f"kernels.vector.VectorKernel or kernels.rankings.RankingKernel")
+
+        return out
+#
+    def reliability_analysis(self, resample: bool = True):
+        """
+
+        Parameters
+        ----------
+        resample : if True, samples are redrawn entirely. If False, samples are built iteratively
+
+        Returns
+        -------
+
+        """
+
 
         self.results_rankings = ru.get_matrix_from_df(self.results, factors=list(self.all_factors),
                                                       alternatives=self.config_data["alternatives_col_name"],
@@ -839,16 +923,31 @@ class ProjectManager:
             sample_rankings = ru.SampleAM.from_rank_vector_matrix(rankings.values)
             sample_vectors = self.results_matrix.loc[:, mask.values].values
 
-            out = self._reliability_analysis_one_configuration(sample_rankings=sample_rankings,
-                                                                    sample_vectors=sample_vectors, out=out,
-                                                                    configuration=configuration)
+            if resample:
+                out = self._reliability_analysis_one_configuration(sample_rankings=sample_rankings,
+                                                                        sample_vectors=sample_vectors, out=out,
+                                                                        configuration=configuration)
+            else:
+                out = self._reliability_analysis_one_configuration_nested(sample_rankings=sample_rankings,
+                                                                        sample_vectors=sample_vectors, out=out,
+                                                                        configuration=configuration)
 
-        self.df_nstar = pd.DataFrame(out)
+
+
+        df_out = pd.DataFrame(out)
+        df_out["nstar"] = np.ceil(df_out["nstar"])
+
+        if resample:
+            self.df_nstar = df_out
+        else:
+            self.df_nstar_nested = df_out
 
         if self.dump_results:
-            self._dump_nstar_df()
+            self._dump_nstar_df(resample)
 
         return self.df_nstar
+
+
 
 
 class PlotManager(ProjectManager):
@@ -862,25 +961,46 @@ class PlotManager(ProjectManager):
         self.pretty_kernels = None
         self.pretty_columns = None
         self.df_nstar = None
+        self.df_nstar_nested = None
         self.dfmmd = None
 
         self._load_nstar_df()
         self._add_Nmax_column_to_dfnstar()
         self._add_latex_column_to_dfnstar()
-        self._load_precomputed_mmd_df()
+        self.dfmmds = {}
+        for resample in (True, False):
+            self.dfmmd = None
+            self._load_precomputed_mmd_df(resample=resample)
+            self.dfmmds[resample] = self.dfmmd
+        self.set_resample()
         self._load_mmd_icdf_coefficients_df()
         self._load_preconfigured_plotting_parameters()
 
+    def set_resample(self, resample: bool = True):
+        """Choose which MMD dataframe (resampled or nested) the plots use."""
+        if self.dfmmds.get(resample) is None:
+            raise ValueError(f"No precomputed MMD with resample={resample}. "
+                             f"Available: {[k for k, v in self.dfmmds.items() if v is not None]}.")
+        self.dfmmd = self.dfmmds[resample]
+        if self.verbose:
+            print(f"[INFO] Loaded MMD for resample={resample}.")
+
     def _add_Nmax_column_to_dfnstar(self):
-        self.df_nstar = self.df_nstar.join(self.df_nstar.groupby(self.configuration_factors)["N"].max(),
-                                           on=self.configuration_factors, rsuffix="max")
+        self.df_nstar = self.df_nstar.join(self.df_nstar.groupby(self.fixed_factors)["N"].max(),
+                                           on=self.fixed_factors, rsuffix="max")
+
+    @staticmethod
+    def add_latex_column(df):
+        out = df.copy()
+        df["kernel_latex"] = df["kernel"].apply(lambda x: Kernel.from_string(x).latex_str())
+        return df
 
     def _add_latex_column_to_dfnstar(self):
-        self.df_nstar.loc[:, "kernel_latex"] = self.df_nstar["kernel"].apply(
-            lambda x: Kernel.from_string(x).latex_str())
+       self.df_nstar = self.add_latex_column(self.df_nstar)
+
 
     def _load_preconfigured_plotting_parameters(self):
-        sns.set(style="ticks", context="paper", font="times new roman", font_scale=1.5)
+        sns.set(style="ticks", context="paper", font="times new roman")
 
         # mpl.use("TkAgg")
         mpl.rcParams['text.usetex'] = True
@@ -888,13 +1008,19 @@ class PlotManager(ProjectManager):
             \usepackage{mathptmx}
             \usepackage{amsmath}
         """
-        mpl.rc('font', family='Times New Roman')
+        font = {
+            "family": "Times New Roman",
+            "size": 10
+        }
+        mpl.rc("font", **font)
+
 
         # pretty names
         self.pretty_columns = {"alpha": r"$\alpha$", 'eps': r"$\varepsilon$", 'nstar': r"$n^*$",
                                'delta': r"$\delta$",
                                'N': r"$N$", 'nstar_absrel_error': "relative error", 'aq': r"$\varepsilon$",
-                               'n': r"$n$"}  # columns
+                               'n': r"$n$",
+                               "leq eps(delta)": r"$\text{R}^k_{n}(P_{N},\varepsilon(\delta))$"}  # columns
 
         # self.pretty_kernels = {"borda_kernel_idx_OHE": r"$\kappa_b^{\text{OHE}, 1/n}$",
         #                        "mallows_kernel_nu_auto": r"$\kappa_m^{1/\binom{n}{2}}$",
@@ -917,12 +1043,47 @@ class PlotManager(ProjectManager):
             "color": "slategray"
         }
 
+    @staticmethod
+    def _plain_log_xticks(ax, labels: bool = True):
+        """Plain decimal labels on a log x-axis, instead of the 3x10^-1 notation."""
+        ax.xaxis.set_minor_locator(mpl.ticker.LogLocator(base=10.0, subs=(2, 3, 4, 6)))
+        fmt = mpl.ticker.FuncFormatter(lambda x, _: rf"${x:g}$") if labels else mpl.ticker.NullFormatter()
+        ax.xaxis.set_major_formatter(fmt)
+        ax.xaxis.set_minor_formatter(fmt)
+
+    def _compute_reliability_df(self, deltas: List[float] = None) -> pd.DataFrame:
+        """
+        Fraction of resampled experiments with MMD below eps(delta), as a function of n.
+        Only the largest N available for each configuration is used.
+        """
+        deltas = deltas if deltas is not None else self.config_params["delta"]
+
+        dfmmd = self.dfmmd.join(self.dfmmd.groupby(self.fixed_factors)["N"].max(),
+                                on=self.fixed_factors, rsuffix="max").query("N == Nmax")
+
+        groupby_keys = self.fixed_factors + ["method", "n"]
+
+        out = []
+        for kernel_name, dfk in dfmmd.groupby("kernel"):
+            kernel_obj = Kernel.from_string(kernel_name)
+            for delta in deltas:
+                eps = kernel_obj.get_eps(delta, na=self.na)
+                rel = (dfk.assign(**{"leq eps(delta)": dfk["mmd"] <= eps})
+                       .groupby(groupby_keys, as_index=False)["leq eps(delta)"].mean())
+                out.append(rel.assign(kernel=kernel_name, delta=delta, eps=eps))
+
+        return self.add_latex_column(pd.concat(out, ignore_index=True))
+
     def plot_nstar_on_alpha_delta(self, alpha_fixed: float = 0.95, delta_fixed: float = 0.05, fig_width: float = 6.5,
-                                  close_other_plots: bool = True):
+                                  close_other_plots: bool = True, resample: bool = True):
 
         if close_other_plots:
             plt.close("all")
-        fig, axes = plt.subplots(1, 2, figsize=(fig_width, fig_width / 2.5), width_ratios=(1, 1), sharey=True)
+
+        if not resample:
+            raise NotImplementedError("resample=False is not implemented for this method.")
+
+        fig, axes = plt.subplots(1, 2, figsize=(fig_width, fig_width / 2), width_ratios=(1, 1), sharey=True)
 
         # ----  ALPHA
         ax = axes[0]
@@ -953,7 +1114,7 @@ class PlotManager(ProjectManager):
         ax.legend().remove()
 
         plt.tight_layout(pad=.5)
-        plt.subplots_adjust(wspace=.12, top=0.86)
+        plt.subplots_adjust(wspace=0.12, top=0.86)
 
         fig.legend(handles=handles, labels=labels, bbox_to_anchor=(0, 0.82 + 0.02, 1, 0.2),
                    loc="center", borderaxespad=1, ncol=dfplot.nunique()["kernel_latex"], frameon=False)
@@ -966,8 +1127,48 @@ class PlotManager(ProjectManager):
         if self.show:
             plt.show()
 
+    def plot_reliability_on_n(self, alpha: float = 0.95, deltas: List[float] = None, fig_width: float = 6.5,
+                              aspect: float = 1.0, col_wrap: int = 2,
+                              close_other_plots: bool = True, resample: bool = True):
+
+        if not resample:
+            raise NotImplementedError("resample=False is not implemented for this method.")
+
+        if close_other_plots:
+            plt.close("all")
+
+        dfplot = self._compute_reliability_df(deltas).rename(columns=self.pretty_columns)
+        P = self.pretty_columns
+
+        ncols = min(dfplot["kernel_latex"].nunique(), col_wrap)
+        height = fig_width / (ncols * aspect)
+
+        g = sns.relplot(
+            data=dfplot, x=P["n"], y=P["leq eps(delta)"], hue=P["delta"], col="kernel_latex",
+            kind="line", estimator="median", errorbar=("pi", 100),
+            palette="flare_r", col_wrap=col_wrap, height=height, aspect=aspect,
+        )
+        g.set_titles(col_template="{col_name}")
+        g.set(ylim=(0, 1.02))
+        for ax in g.axes.flat:
+            ax.axhline(alpha, **self.axlines_args)
+        sns.move_legend(
+            g, "lower center", bbox_to_anchor=(0.5, 1.0),
+            ncol=dfplot[P["delta"]].nunique(), frameon=False,
+        )
+
+        plt.tight_layout(pad=.5)
+
+        if self.save:
+            g.savefig(self.figures_dir / f"{self.project_name}_reliability_on_nstar.pdf", bbox_inches="tight")
+        if self.show:
+            plt.show()
+
+        return g
+
     def plot_simulated_experimental_study(self, configuration: dict, alpha: float, delta: float, fig_width: float = 6.5,
-                                          close_other_plots: bool = True, kernels: List = None):
+                                          xmin_padding: float = 0.8,
+                                          close_other_plots: bool = True, kernels: List = None, resample: bool = True):
         """
         Predictions for nstar based on the non-approximating methods.
         Loads the precomputed MMD files.
@@ -987,14 +1188,15 @@ class PlotManager(ProjectManager):
         if close_other_plots:
             plt.close("all")
 
+        self.set_resample(resample)
+
         kernels = kernels if kernels is not None else self.kernels
         for kernel_obj in kernels:
 
             eps = kernel_obj.get_eps(delta, na=self.na)
 
-            padding = 0.8
-            xmin = eps * padding
-            xmax = max(eps, self.dfmmd["mmd"].max()) / padding
+            xmin = eps * xmin_padding
+            xmax = max(eps, self.dfmmd["mmd"].max()) #/ padding
 
             query_str = self._get_query_string_from_configuration(configuration)
             dfmmd_configuration = self.dfmmd.query(query_str)
@@ -1006,11 +1208,12 @@ class PlotManager(ProjectManager):
                 raise ValueError(f"Kernel {kernel_obj} is not a valid kernel for configuration {configuration}."
                                  f"To see the valid kernels: self.dfmmd.query(self._get_query_string_from_configuration(configuration))['kernels'].unique()")
 
-            fig, axes = plt.subplots(3, dfmmd_kernel.nunique()["N"], figsize=(fig_width, 0.7 * fig_width), sharex=False, sharey="row",
-                                     layout="constrained",
-                                     height_ratios=[7, 7, 1])
+            Ns = dfmmd_kernel["N"].unique()
 
-            for icol, Ncol in enumerate(dfmmd_kernel["N"].unique()):
+            fig, axes = plt.subplots(3, len(Ns), figsize=(fig_width, 0.7 * fig_width), sharex=False, sharey="row",
+                                     layout="constrained", height_ratios=[7, 7, 1])
+
+            for icol, Ncol in enumerate(Ns):
 
                 dfplot = dfmmd_kernel.query("N == @Ncol")
 
@@ -1034,7 +1237,7 @@ class PlotManager(ProjectManager):
                 ax.axvline(eps, **self.axlines_args)
 
                 if icol == 0:
-                    ax.set_ylabel(r"$\text{R}^k_n(\hat P_N, \varepsilon)$")
+                    ax.set_ylabel(fr"$\text{{R}}^{{{kernel_obj.latex_str().strip("$")}}}_n(P_N, \varepsilon)$")
 
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning)
@@ -1042,7 +1245,7 @@ class PlotManager(ProjectManager):
 
                 # Clean after seaborn
                 ax.set_xlabel("")
-                ax.set_xticklabels([])
+                self._plain_log_xticks(ax, labels=False)
 
                 # Quantile lines
                 # for (n, laq), color in zip(alpha_quantiles.items(), sns.color_palette(palette, n_colors=len(alpha_quantiles))):
@@ -1080,7 +1283,7 @@ class PlotManager(ProjectManager):
 
                     ax.plot(epss, ns_pred, color="maroon", ls=":", alpha=0.7)
                     ax.plot(eps, nstar, marker='*', color='maroon', markersize=7)
-                    ax.text(eps * 1.2, 1.2 * nstar, rf"$n^*_{{{Ncol}}} = {nstar}$", color="maroon")
+                    ax.text(eps * 1.2, 1.2 * nstar, rf"$\hat{{n}}^*_{{{Ncol}}} = {nstar}$", color="maroon", fontsize=8)
                 except ValueError:
                     if self.verbose:
                         print(f"[WARNING] Failed linear regression for configuration: {dict2str(configuration)} and N: {Ncol}. Shape of X, y: {X.shape}, {y.shape}.")
@@ -1090,6 +1293,7 @@ class PlotManager(ProjectManager):
                 #     ax.vlines(aq, ymin=n, ymax=nstar, ls="-", color=color, lw=lw)
                 # ax.axvline(aq, ymin=1, ymax=1.2, ls=":", color=color, lw=lw, zorder=-1, clip_on=False)
                 ax.set_xlim(xmin, xmax)
+                self._plain_log_xticks(ax)
 
                 # Turn off unnecessary axes (they're here to be replaced by the colormap)
                 ax = axes[2, icol]
@@ -1100,12 +1304,12 @@ class PlotManager(ProjectManager):
                 ax.set_xticklabels([])
 
                 # Add colormap
-                if Ncol == self.dfmmd["N"].max():
-                    sm = plt.cm.ScalarMappable(cmap="crest_r",
-                                               norm=plt.Normalize(self.dfmmd["n"].min(), self.dfmmd["n"].max()))
+                if Ncol == max(Ns):
+                    nmin, nmax = dfmmd_kernel["n"].min(), dfmmd_kernel["n"].max()
+                    sm = plt.cm.ScalarMappable(cmap="crest_r", norm=plt.Normalize(nmin, nmax))
                     ax.figure.colorbar(sm, ax=axes[-1, :], location="bottom", shrink=0.5, extend="max", label="$n$",
                                        pad=0,
-                                       fraction=1, ticks=range(0, self.dfmmd["N"].max(), 2))
+                                       fraction=1, ticks=range(int(nmin), int(nmax) + 1, 2))
 
             # - General formatting
             sns.despine(top=True, right=True)
@@ -1115,89 +1319,141 @@ class PlotManager(ProjectManager):
             if self.show:
                 plt.show()
 
-    def plot_nstar_method_comparison(self, ):
-
-        plt.close("all")
-
-        for kernel_obj in self.kernels:
-            tmp = self.df_nstar.query("kernel == @kernel_obj.__str__()").drop(columns=["disjoint", "replace"])
-            tmp_emb = tmp.query("method != 'approximation'").drop(columns="method")
-            tmp_emb = tmp_emb.set_index([col for col in tmp_emb.columns if col != "nstar"])
-            tmp_app = tmp.query("method == 'approximation'").drop(columns="method")
-            tmp_app = tmp_app.set_index([col for col in tmp_app.columns if col != "nstar"])
-
-            dfplot = tmp_emb / tmp_app
-            dfplot = dfplot.reset_index()
-
-            fig, axes = plt.subplots(1, 2)
-            fig.suptitle(kernel_obj)
-
-            ax = axes[0]
-            ax.set_title("Comparison embedding and approximation")
-            sns.boxplot(data=dfplot, x="alpha", y="nstar", hue="delta", ax=ax, **self.boxplot_args)
-            ax.axhline(1, color="grey", ls="--")
-            ax.set_ylabel("emb/app")
-
-            ax = axes[1]
-            ax.set_title("Median emb/app. Variation on the fixed configuration")
-            dfplot2 = dfplot.groupby(["alpha", "delta"])["nstar"].agg(lambda x: np.median(np.abs(x))).reset_index()
-            sns.scatterplot(data=dfplot2, x="alpha", y="delta", hue="nstar", palette="vlag", size="nstar", ax=ax)
-
-            # plt.get_current_fig_manager().window.state('zoomed')
-            fig.show()
-
-    def plot_nstar_approximation_comparison(self, configuration: dict, kernel_name: str = None,
-                                            close_other_plots: bool = True):
-
-        query_str = self._get_query_string_from_configuration(dict(configuration, **{"N": self.dfmmd["N"].max(),
-                                                                                     "kernel": kernel_name}))
-
-        mmd_cdf_symbol = r"$\hat F_n$"
-        approx_cdf_symbol = r"$\sim \Phi_n$"
-
-        dfmmd1 = self.dfmmd.query(query_str)
-        dfcoef1 = self.icdf_coefficiens.query(query_str)
+    def plot_reliability_resampling_comparison_on_n(self, alpha: float = 0.95, delta: float = 0.05,
+                                                    fig_width: float = 6.5, aspect: float = 1.0, col_wrap: int = 2,
+                                                    close_other_plots: bool = True):
+        """
+        Reliability as a function of n for a fixed delta, estimated with resample=True and with resample=False.
+        Same layout as plot_reliability_on_n, with the hue on the sampling scheme.
+        """
 
         if close_other_plots:
             plt.close("all")
 
-        fig, ax = plt.subplots()
-        for n in dfmmd1["n"].unique()[::2]:
-            dfmmd2 = dfmmd1.query("n == @n")
+        dfmmd_backup = self.dfmmd
 
-            xmin = np.quantile(dfmmd2["mmd"], 0.6)
-            xmax = dfmmd2["mmd"].max()
+        pretty_resample = {True: "resampled", False: "nested"}
 
-            L1, L4 = dfcoef1[["L1", "L4"]].values.flatten()
-            # a = (L4 - L1 ** 2) / L1
-            # k = 2 * L1 ** 2 / (L4 - L1 ** 2)
-            # r = 1
+        dfrels = []
+        for resample in (True, False):
+            self.set_resample(resample)
+            dfrels.append(self._compute_reliability_df([delta]).assign(sampling=pretty_resample[resample]))
+        self.dfmmd = dfmmd_backup
 
-            # Y
-            # Y = a * rng.chisquare(df=k, size=1000) ** r
+        dfplot = pd.concat(dfrels, ignore_index=True).rename(columns=self.pretty_columns)
+        P = self.pretty_columns
 
-            # close formula
-            epss = np.linspace(xmin, xmax, 1000)
-            CF = self._mmd_cdf_approximation(epss, L1, L4, n)
+        ncols = min(dfplot["kernel_latex"].nunique(), col_wrap)
+        height = fig_width / (ncols * aspect)
 
-            sns.ecdfplot(data=dfmmd2, x="mmd", ax=ax, c="slategray", label=mmd_cdf_symbol)
-            # sns.ecdfplot(x=np.sqrt(Y) / np.sqrt(n), ax=ax, label="Y", ls=":", c="orange")
-            sns.lineplot(x=epss, y=CF, ax=ax, label=approx_cdf_symbol, ls="--", c="blue")
+        g = sns.relplot(
+            data=dfplot, x=P["n"], y=P["leq eps(delta)"], hue="sampling", col="kernel_latex",
+            kind="line", estimator="median", errorbar=("pi", 100),
+            palette="coolwarm", col_wrap=col_wrap, height=height, aspect=aspect,
+        )
+        g.set_titles(col_template="{col_name}")
+        g.set(ylim=(0, 1.02))
+        for ax in g.axes.flat:
+            ax.axhline(alpha, **self.axlines_args)
+        g.legend.set_title("")
+        sns.move_legend(
+            g, "lower center", bbox_to_anchor=(0.5, 1.0),
+            ncol=dfplot["sampling"].nunique(), frameon=False,
+        )
 
-        # fix legend
-        h, l = ax.get_legend_handles_labels()
-        h = [h[l.index(s)] for s in [mmd_cdf_symbol, approx_cdf_symbol]]
-        l = [mmd_cdf_symbol, approx_cdf_symbol]
-        ax.legend(h, l, frameon=False)
+        plt.tight_layout(pad=.5)
 
-        ax.set_xscale(r"log")
-        ax.set_ylabel(r"\hat\Phi_n")
-        ax.set_xlabel(r"$\varepsilon$")
-        ax.set_xlim(10e-3, 2)
+        if self.save:
+            g.savefig(self.figures_dir / f"{self.project_name}_reliability_resampling_on_nstar__delta={delta}.pdf",
+                      bbox_inches="tight")
+        if self.show:
+            plt.show()
 
-        sns.despine(top=True, right=True)
+        return g
 
-        fig.show()
+    # def plot_nstar_method_comparison(self, ):
+    #
+    #     plt.close("all")
+    #
+    #     for kernel_obj in self.kernels:
+    #         tmp = self.df_nstar.query("kernel == @kernel_obj.__str__()").drop(columns=["disjoint", "replace"])
+    #         tmp_emb = tmp.query("method != 'approximation'").drop(columns="method")
+    #         tmp_emb = tmp_emb.set_index([col for col in tmp_emb.columns if col != "nstar"])
+    #         tmp_app = tmp.query("method == 'approximation'").drop(columns="method")
+    #         tmp_app = tmp_app.set_index([col for col in tmp_app.columns if col != "nstar"])
+    #
+    #         dfplot = tmp_emb / tmp_app
+    #         dfplot = dfplot.reset_index()
+    #
+    #         fig, axes = plt.subplots(1, 2)
+    #         fig.suptitle(kernel_obj)
+    #
+    #         ax = axes[0]
+    #         ax.set_title("Comparison embedding and approximation")
+    #         sns.boxplot(data=dfplot, x="alpha", y="nstar", hue="delta", ax=ax, **self.boxplot_args)
+    #         ax.axhline(1, color="grey", ls="--")
+    #         ax.set_ylabel("emb/app")
+    #
+    #         ax = axes[1]
+    #         ax.set_title("Median emb/app. Variation on the fixed configuration")
+    #         dfplot2 = dfplot.groupby(["alpha", "delta"])["nstar"].agg(lambda x: np.median(np.abs(x))).reset_index()
+    #         sns.scatterplot(data=dfplot2, x="alpha", y="delta", hue="nstar", palette="vlag", size="nstar", ax=ax)
+    #
+    #         # plt.get_current_fig_manager().window.state('zoomed')
+    #         fig.show()
+    #
+    # def plot_nstar_approximation_comparison(self, configuration: dict, kernel_name: str = None,
+    #                                         close_other_plots: bool = True):
+    #
+    #     query_str = self._get_query_string_from_configuration(dict(configuration, **{"N": self.dfmmd["N"].max(),
+    #                                                                                  "kernel": kernel_name}))
+    #
+    #     mmd_cdf_symbol = r"$\hat F_n$"
+    #     approx_cdf_symbol = r"$\sim \Phi_n$"
+    #
+    #     dfmmd1 = self.dfmmd.query(query_str)
+    #     dfcoef1 = self.icdf_coefficiens.query(query_str)
+    #
+    #     if close_other_plots:
+    #         plt.close("all")
+    #
+    #     fig, ax = plt.subplots()
+    #     for n in dfmmd1["n"].unique()[::2]:
+    #         dfmmd2 = dfmmd1.query("n == @n")
+    #
+    #         xmin = np.quantile(dfmmd2["mmd"], 0.6)
+    #         xmax = dfmmd2["mmd"].max()
+    #
+    #         L1, L4 = dfcoef1[["L1", "L4"]].values.flatten()
+    #         # a = (L4 - L1 ** 2) / L1
+    #         # k = 2 * L1 ** 2 / (L4 - L1 ** 2)
+    #         # r = 1
+    #
+    #         # Y
+    #         # Y = a * rng.chisquare(df=k, size=1000) ** r
+    #
+    #         # close formula
+    #         epss = np.linspace(xmin, xmax, 1000)
+    #         CF = self._mmd_cdf_approximation(epss, L1, L4, n)
+    #
+    #         sns.ecdfplot(data=dfmmd2, x="mmd", ax=ax, c="slategray", label=mmd_cdf_symbol)
+    #         # sns.ecdfplot(x=np.sqrt(Y) / np.sqrt(n), ax=ax, label="Y", ls=":", c="orange")
+    #         sns.lineplot(x=epss, y=CF, ax=ax, label=approx_cdf_symbol, ls="--", c="blue")
+    #
+    #     # fix legend
+    #     h, l = ax.get_legend_handles_labels()
+    #     h = [h[l.index(s)] for s in [mmd_cdf_symbol, approx_cdf_symbol]]
+    #     l = [mmd_cdf_symbol, approx_cdf_symbol]
+    #     ax.legend(h, l, frameon=False)
+    #
+    #     ax.set_xscale(r"log")
+    #     ax.set_ylabel(r"\hat\Phi_n")
+    #     ax.set_xlabel(r"$\varepsilon$")
+    #     ax.set_xlim(10e-3, 2)
+    #
+    #     sns.despine(top=True, right=True)
+    #
+    #     fig.show()
 
 
 if __name__ == "__main__()":

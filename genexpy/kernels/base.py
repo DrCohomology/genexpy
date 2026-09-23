@@ -73,4 +73,4 @@ class Kernel:
         pass
 
     def latex_str(self):
-        return r"$\kappa$"
+        return r"$k"

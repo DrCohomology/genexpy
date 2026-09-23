@@ -140,12 +140,13 @@ class RankingKernel(base.Kernel):
     def _gram_matrix_vectorized(self, *args) -> np.ndarray[float]:
         raise NotImplementedError()
 
-    def gram_matrix(self, sample, *args) -> np.ndarray[float]:
+    def gram_matrix(self, sample1, sample2=None) -> np.ndarray[float]:
+        x1 = self._convert_sample_to_input_format(sample1)
+        x2 = x1 if sample2 is None else self._convert_sample_to_input_format(sample2)
         try:
-            x = self._convert_sample_to_input_format(sample)
-            return self._gram_matrix_vectorized(x, x)
+            return self._gram_matrix_vectorized(x1, x2)
         except NotImplementedError:
-            return self._gram_matrix_naive(*args)
+            return self._gram_matrix_naive(sample1, sample1 if sample2 is None else sample2)
 
     def __repr__(self):
         return "Kernel"
@@ -251,38 +252,68 @@ class RankingKernel(base.Kernel):
 
         return np.sqrt(np.abs(np.mean(Kxx, axis=(1, 2)) + np.mean(Kyy, axis=(1, 2)) - 2 * np.mean(Kxy, axis=(1, 2))))
 
-    def _mmd_distribution_embedding(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0, disjoint: bool = True,
-                                    replace: bool = False, use_cached_support_matrix: bool = False) -> np.ndarray[
-        float]:
+    def _mmd_distribution_embedding(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0,
+                                    disjoint: bool = True, replace: bool = False,
+                                    use_cached_support_matrix: bool = False) -> np.ndarray[float]:
 
-        ms1, ms2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed, disjoint=disjoint, replace=replace)
+        if use_cached_support_matrix and self.support is None:
+            raise ValueError("To cache the support matrix, self.support must be set.")
+
+        ms1, ms2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed,
+                                               disjoint=disjoint, replace=replace)
 
         ms1 = ru.MultiSampleAM(ms1)
         ms2 = ru.MultiSampleAM(ms2)
 
-        pmf_df1 = ms1.get_pmfs_df(self.support)
-        pmf_df2 = ms2.get_pmfs_df(self.support)
+        # ms1[0] is compared to ms2[0] etc..., i.e. alpha[:, 0] pairs ms1[0] with ms2[0]
+        alpha, support = ms1.get_alpha(ms2, support=self.support)
 
-        # ms1[0] is compared to ms2[0] etc...
-        # equivalently, pmf_df1.iloc[:, 0] is compared with pmf_df2.iloc[:, 0]
-        alpha_df = pmf_df1 - pmf_df2
-        alpha_df = alpha_df.fillna(pmf_df1).fillna(-pmf_df2)  # if a ranking does not appear in both is an NaN
+        if not (use_cached_support_matrix and self.K is not None):
+            x = self._convert_sample_to_input_format(support)
+            self.K = self.gram_matrix(x, x)
 
-        alpha = alpha_df.values
+        if self.K.shape[0] != len(support):
+            raise ValueError(f"The cached support matrix is {self.K.shape[0]}x{self.K.shape[0]} but the support "
+                             f"holds {len(support)} rankings. Call set_support to clear the cache.")
 
-        if use_cached_support_matrix:
-            if self.support is None:
-                raise ValueError("To cache the support matrix, self.support must be set.")
-            if self.K is not None:
-                return np.sqrt(np.abs(np.diag(alpha.T @ self.K @ alpha)))
+        # only the diagonal of alpha.T @ K @ alpha is needed, so the rep x rep
+        # product is never formed. The absolute value is to avoid machine 0-s.
+        return np.sqrt(np.abs(np.einsum("ir,ir->r", alpha, self.K @ alpha)))
 
-        # get the kernel matrix from the index of alpha (the support)
-        support = self.support if self.support is not None else ru.SampleAM(alpha_df.index.values)
-        x = self._convert_sample_to_input_format(support)
-        self.K = self.gram_matrix(x, x)
-
-        # the absolute value is to avoid machine 0-s.
-        return np.sqrt(np.abs(np.diag(alpha.T @ self.K @ alpha)))
+    # def _mmd_distribution_embedding(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0, disjoint: bool = True,
+    #                                 replace: bool = False, use_cached_support_matrix: bool = False) -> np.ndarray[
+    #     float]:
+    #
+    #     ms1, ms2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed, disjoint=disjoint, replace=replace)
+    #
+    #     ms1 = ru.MultiSampleAM(ms1)
+    #     ms2 = ru.MultiSampleAM(ms2)
+    #
+    #     pmf_df1 = ms1.get_pmfs_df(self.support)
+    #     pmf_df2 = ms2.get_pmfs_df(self.support)
+    #
+    #     # ms1[0] is compared to ms2[0] etc...
+    #     # equivalently, pmf_df1.iloc[:, 0] is compared with pmf_df2.iloc[:, 0]
+    #     alpha_df = pmf_df1 - pmf_df2
+    #     alpha_df = alpha_df.fillna(pmf_df1).fillna(-pmf_df2)  # if a ranking does not appear in both is an NaN
+    #
+    #     alpha = alpha_df.values
+    #
+    #     if use_cached_support_matrix:
+    #         if self.support is None:
+    #             raise ValueError("To cache the support matrix, self.support must be set.")
+    #         if self.K is not None:
+    #             return np.sqrt(np.abs(np.diag(alpha.T @ self.K @ alpha)))
+    #
+    #     # get the kernel matrix from the index of alpha (the support)
+    #     support = self.support if self.support is not None else ru.SampleAM(alpha_df.index.values)
+    #     x = self._convert_sample_to_input_format(support)
+    #     self.K = self.gram_matrix(x, x)
+    #
+    #     # the absolute value is to avoid machine 0-s.
+    #     out = np.einsum("ir,ir->r", alpha, self.K @ alpha)
+    #     # out = np.diag(alpha.T @ self.K @ alpha  # old
+    #     return np.sqrt(np.abs(out))
 
     def _mmd_icdf_approximation(self, sample: ru.SampleAM, n: int, rep: int, alpha_min: float = 0.6,
                                 alpha_max: float = 1) -> np.ndarray[float]:
@@ -431,10 +462,10 @@ class BordaKernel(RankingKernel):
                                                     excluded="self")
 
     def __repr__(self):
-        return f"BordaKernel(nu={self.nu:.2f}, idx={self.idx})"
+        return f"BordaKernel(nu={self.nu:.5f}, idx={self.idx})"
 
     def latex_str(self):
-        return fr"$k_\text{{b}}^{{\nu={self.nu:.2f}, a^*={self.idx}}}$"
+        return fr"$k_\text{{b}}^{{\nu={self.nu:.3f}, a^*={self.idx}}}$"
 
     def get_eps(self, delta, na: int = None):
         if self.nu == "auto":
@@ -650,7 +681,7 @@ class MallowsKernel(RankingKernel):
                                                     excluded="self")
 
     def __repr__(self):
-        return f"MallowsKernel(nu={self.nu:.2f})"
+        return f"MallowsKernel(nu={self.nu:.5f})"
 
     def get_eps(self, delta, na: int = None):
         if self.nu == "auto":
@@ -674,7 +705,7 @@ class MallowsKernel(RankingKernel):
         if self.nu == "auto":
             if na is None or na <= 1:
                 raise ValueError("If nu == 'auto', parameter na >= 2 has to be passed.")
-            self.nu = 1 / (na * (na - 1))
+            self.nu = 2 / (na * (na - 1))
 
     def _bytes(self, b1: RankByte, b2: RankByte) -> float:
         i1 = np.frombuffer(b1, dtype=np.int8)
@@ -741,4 +772,4 @@ class MallowsKernel(RankingKernel):
         return np.exp(-self.nu / 2 * ndisc)
 
     def latex_str(self):
-        return fr"$k_\text{{m}}^{{\nu={self.nu:.2f}}}$"
+        return fr"$k_\text{{m}}^{{\nu={self.nu:.3f}}}$"
