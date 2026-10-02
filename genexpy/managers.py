@@ -60,6 +60,7 @@ class ProjectManager:
         # --- Core data structures ---
         self.estimation_methods = None
         self.dfmmd = None
+        self.dfmmds = {True: None, False: None}  # precomputed MMD, keyed by the resample flag
         self.df_nstar = None
         self.df_nstar_nested = None
         self.factors_dict = None
@@ -109,10 +110,7 @@ class ProjectManager:
                 print("[INFO] Created project directories.")
 
         if self.load_precomputed_mmd:
-            for resample in [True, False]:
-                self._load_precomputed_mmd_df(resample=resample)
-            if self.verbose:
-                print("[INFO] Loaded existing results.")
+            self._load_all_precomputed_mmd()
 
     def _load_config_file(self):
         """Load experiment configuration from YAML and initialize project parameters."""
@@ -290,28 +288,44 @@ class ProjectManager:
         return query_str
 
     # ---- Routines to load and dump files
-    def _load_preloaded_mmd_df(self, resample: bool = True):
-        try:
-            dfmmd = pd.read_parquet(self.outputs_dir / f"preloaded_mmd__resample={resample}.parquet")
-        except FileNotFoundError:
-            return False
+    def _load_all_precomputed_mmd(self):
+        """Load the precomputed MMD for both sampling schemes, keeping them in separate dataframes."""
+        for resample in (True, False):
+            self.dfmmds[resample] = self._load_precomputed_mmd_df(resample=resample, verbose=self.verbose)
+        self.dfmmd = self.dfmmds[True]
 
-        if not (dfmmd.get("resample", pd.Series(True, index=dfmmd.index)) == resample).all():
+        if self.verbose:
+            nrows = {k: 0 if v is None else len(v) for k, v in self.dfmmds.items()}
+            print(f"[INFO] Loaded precomputed MMD: {nrows[True]} rows resampled, {nrows[False]} rows nested.")
+
+    def _load_preloaded_mmd_df(self, resample: bool = True) -> Union[pd.DataFrame, None]:
+        preloaded_path = self.outputs_dir / f"preloaded_mmd__resample={resample}.parquet"
+        if not preloaded_path.exists():
+            return None
+
+        # The snapshot is stale if MMD files were added, removed or rewritten after it was written
+        if self.sample_mmd_dir.exists():
+            sources = [self.sample_mmd_dir, *self.sample_mmd_dir.glob(f"*.{self.df_format}")]
+            if max(p.stat().st_mtime for p in sources) > preloaded_path.stat().st_mtime:
+                return None
+
+        dfmmd = pd.read_parquet(preloaded_path)
+        if "resample" not in dfmmd.columns or not (dfmmd["resample"] == resample).all():
             warnings.warn(f"Preloaded MMD for resample={resample} does not match its flag. Reloading from files.")
-            return False
+            return None
 
-        self.dfmmd = dfmmd
-        return True
+        return dfmmd
 
     def _load_precomputed_mmd_df(self, configuration_str: str = None, kernel_name: str = None, N: int = None,
-                                 resample: bool = True, verbose: bool = False):
-
-        if self._load_preloaded_mmd_df(resample):
-            if verbose:
-                print("[INFO] Loaded preloaded mmd dataframe.")
-            return
+                                 resample: bool = True, verbose: bool = False) -> Union[pd.DataFrame, None]:
 
         preloaded_path = self.outputs_dir / f"preloaded_mmd__resample={resample}.parquet"
+
+        dfmmd = self._load_preloaded_mmd_df(resample)
+        if dfmmd is not None:
+            if verbose:
+                print(f"[INFO] Loaded preloaded mmd dataframe for resample={resample}.")
+            return dfmmd
 
         dfs = []
         for filepath in self.sample_mmd_dir.glob(f"*.{self.df_format}"):
@@ -338,28 +352,35 @@ class ProjectManager:
                         continue
                     if kernel_name is not None and matched_kernel != kernel_name:
                         continue
-                    if N is not None and matched_N != N:
+                    if N is not None and int(matched_N) != N:
                         continue
 
-                    dfs.append(pd.read_parquet(filepath))
+                    df = pd.read_parquet(filepath)
+                    # the file name is authoritative: legacy files have no resample column
+                    df["resample"] = resample
+                    dfs.append(df)
 
                 case _:
                     raise NotImplementedError()
         if not dfs:
-            self.dfmmd = None
+            preloaded_path.unlink(missing_ok=True)
             if verbose:
                 print(f"[INFO] No precomputed MMD to load for resample={resample}.")
-            return
+            return None
 
-        self.dfmmd = pd.concat(dfs, ignore_index=True)
+        dfmmd = pd.concat(dfs, ignore_index=True)
 
         if verbose:
             print(f"[INFO] Loaded precomputed MMD for {len(self.precomputed_configurations)} configurations, "
                   f"{len(self.precomputed_kernels)} kernels, and {len(self.precomputed_Ns)} values of N.")
 
-        self.dfmmd.to_parquet(preloaded_path)
-        if verbose:
-            print(f"[INFO] Dumped preloaded MMD dataframe in {preloaded_path}")
+        # Filtered loads are partial: caching them would hide the other files at the next load
+        if configuration_str is None and kernel_name is None and N is None:
+            dfmmd.to_parquet(preloaded_path)
+            if verbose:
+                print(f"[INFO] Dumped preloaded MMD dataframe in {preloaded_path}")
+
+        return dfmmd
 
     def _load_preloaded_mmd_icdf(self):
         try:
@@ -455,7 +476,7 @@ class ProjectManager:
                 raise NotImplementedError()
 
     def _dump_nstar_df(self, resample: bool = True):
-        if self.df_nstar is None:
+        if self.df_nstar is None and self.df_nstar_nested is None:
             warnings.warn("No df_nstar to dump. Run reliability_analysis first to initialize it.")
             return
 
@@ -473,17 +494,14 @@ class ProjectManager:
 
     def _get_existing_precomputed_mmd(self, configuration: dict, kernel_obj: kernels.base.Kernel, N: int,
                                       resample: bool = True):
-        if self.dfmmd is not None:
-            precomputed_mmd = self.dfmmd.loc[self.dfmmd["kernel"] == str(kernel_obj)]
-            precomputed_mmd = precomputed_mmd.query("N == @N")
-            if "resample" in precomputed_mmd.columns:
-                precomputed_mmd = precomputed_mmd.query("resample == @resample")
-            elif not resample:
-                return pd.DataFrame()  # legacy files without the flag are resampled
-            for factor, lvl in configuration.items():
-                precomputed_mmd = precomputed_mmd.query(f"{factor} == @lvl")
-        else:
-            precomputed_mmd = pd.DataFrame()
+        dfmmd = self.dfmmds.get(resample)
+        if dfmmd is None:
+            return pd.DataFrame()
+
+        precomputed_mmd = dfmmd.loc[dfmmd["kernel"] == str(kernel_obj)]
+        precomputed_mmd = precomputed_mmd.query("N == @N")
+        for factor, lvl in configuration.items():
+            precomputed_mmd = precomputed_mmd.query(f"{factor} == @lvl")
 
         return precomputed_mmd
 
@@ -945,10 +963,7 @@ class ProjectManager:
         if self.dump_results:
             self._dump_nstar_df(resample)
 
-        return self.df_nstar
-
-
-
+        return df_out
 
 class PlotManager(ProjectManager):
     def __init__(self, config_yaml_path: Union[str, Path], demo_dir: Union[str, Path], save: bool = True,
@@ -1210,7 +1225,7 @@ class PlotManager(ProjectManager):
 
             Ns = dfmmd_kernel["N"].unique()
 
-            fig, axes = plt.subplots(3, len(Ns), figsize=(fig_width, 0.7 * fig_width), sharex=False, sharey="row",
+            fig, axes = plt.subplots(3, len(Ns), figsize=(fig_width, 0.5 * fig_width), sharex=False, sharey="row",
                                      layout="constrained", height_ratios=[7, 7, 1])
 
             for icol, Ncol in enumerate(Ns):
@@ -1454,7 +1469,6 @@ class PlotManager(ProjectManager):
     #     sns.despine(top=True, right=True)
     #
     #     fig.show()
-
 
 if __name__ == "__main__()":
     import os
