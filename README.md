@@ -1,4 +1,4 @@
-# genexpy: External validity of Experimental Studies
+# genexpy: External Validity of Experimental Studies
 
 genexpy is a Python package to assess the **external validity** of experimental studies, i.e., the extent to which
 the findings of a study generalize to unseen experimental conditions (other datasets, seeds, hardware, ...).
