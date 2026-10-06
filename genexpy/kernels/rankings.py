@@ -1,5 +1,21 @@
+"""
+Kernels for rankings.
+
+A ranking of na alternatives is stored either as a rank vector (``r[i]`` is the rank of alternative i,
+0 = best, ties allowed) or as the bytes of its adjacency matrix (see ``genexpy.utils.rankings``).
+Every kernel is normalized, k(r, r) = 1, and takes values in [0, 1].
+
+- ``BordaKernel(alternative=..., nu=...)``: are the results similar w.r.t. the position of one alternative?
+- ``JaccardKernel(t=...)``: are the results similar w.r.t. the alternatives in the top-t tiers?
+- ``MallowsKernel(nu=...)``: are the results similar w.r.t. the whole ranking?
+
+Besides the kernel itself, every kernel estimates the distribution of the MMD between two samples of n
+rankings drawn from a sample of rankings (``mmd_distribution``), which is what the external validity
+analysis is built on.
+"""
+
+import numbers
 import warnings
-from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -13,8 +29,26 @@ RankVector: TypeAlias = np.ndarray[int]
 RankByte: TypeAlias = bytes
 Ranking: TypeAlias = Union[RankVector, RankByte]
 
+MMDMethod: TypeAlias = Literal["auto", "naive", "vectorized", "embedding", "approximation"]
+
+
+def _validate_bandwidth(name: str, value) -> float:
+    """Return `value` as a float if it is a valid (non-negative, real) kernel bandwidth, raise otherwise."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real) or value < 0:
+        raise ValueError(f"Invalid value for parameter {name}={value}. Accepted: non-negative float or 'auto'.")
+    return float(value)
+
 
 class RankingKernel(base.Kernel):
+    """
+    Base class of the kernels for rankings.
+
+    Parameters
+    ----------
+    support : ru.UniverseAM, optional
+        The rankings over which the Gram matrix used by the 'embedding' method is computed and cached.
+        Set it with ``set_support``. If None, the support is recomputed at every call.
+    """
     vectorized_input_format: Literal["adjmat", "vector"] = None
 
     def __init__(self, support: ru.UniverseAM = None, **kwargs) -> None:
@@ -23,11 +57,19 @@ class RankingKernel(base.Kernel):
         self.K = None  # gram matrix of the support
 
     def set_support(self, support: ru.UniverseAM):
+        """Set the rankings on which the Gram matrix is cached, and clear the cache."""
         self.support = support
         self.K = None
 
-    def get_eps(self, delta, na: int = None):
-        pass
+    def get_eps(self, delta: float, na: int = None) -> float:
+        """MMD threshold epsilon corresponding to the kernel-specific similarity threshold delta."""
+        raise NotImplementedError
+
+    def _resolve_na(self, na: int = None) -> int:
+        na = na if na is not None else getattr(self, "na", None)
+        if na is None:
+            raise ValueError("The number of alternatives na must be passed.")
+        return na
 
     def _validate_parameters(self):
         pass
@@ -42,105 +84,119 @@ class RankingKernel(base.Kernel):
 
     @staticmethod
     def _validate_vectorized_inputs_rv(rv1: RankVector, rv2: RankVector):
-        if rv1.shape != rv2.shape:
-            raise ValueError("The two rank matrices' dimensions do not match.")
-        elif len(rv1.shape) != 2:
-            raise ValueError(
-                f"The shape of the input should be that of a valid RankVector, i.e., (num_alternatives, num_voters). "
-                f"Object of shape {rv1.shape} is not a valid RankVector.")
+        """Rank matrices have shape (..., na, n): the number of alternatives na must coincide."""
+        for rv in (rv1, rv2):
+            if np.ndim(rv) < 2:
+                raise ValueError(
+                    f"The shape of the input should be that of a valid rank matrix, i.e., (num_alternatives, "
+                    f"num_rankings). Object of shape {np.shape(rv)} is not a valid rank matrix.")
+        if rv1.shape[-2] != rv2.shape[-2]:
+            raise ValueError(f"The two rank matrices' dimensions do not match: {rv1.shape} and {rv2.shape}.")
 
     @staticmethod
     def _validate_vectorized_inputs_ams(ams1: ru.AdjacencyMatrix, ams2: ru.AdjacencyMatrix):
-        if ams1.shape != ams2.shape:
-            raise ValueError("The two adjacency matrices' dimensions do not match.")
-        elif ams1.shape[1] != ams1.shape[2]:
-            raise ValueError(f"Input with shape {ams1.shape} is not an array of adjacency matrices (shape[1] and "
-                             f"shapoe[2] should coincide).")
-        elif len(ams1.shape) != 3:
-            raise ValueError(
-                f"The shape of the input should be that of a valid AdjacencyMatrix, i.e., (num_voters, num_alternatives, num_alternatives). "
-                f"Object of shape {ams1.shape} is not a valid AdjacencyMatrix.")
+        """Arrays of adjacency matrices have shape (..., n, na, na): na must coincide."""
+        for ams in (ams1, ams2):
+            if np.ndim(ams) < 3:
+                raise ValueError(
+                    f"The shape of the input should be that of an array of adjacency matrices, i.e., (num_rankings, "
+                    f"num_alternatives, num_alternatives). Object of shape {np.shape(ams)} is not valid.")
+            if ams.shape[-1] != ams.shape[-2]:
+                raise ValueError(f"Input with shape {ams.shape} is not an array of adjacency matrices (the last two "
+                                 f"dimensions should coincide).")
+        if ams1.shape[-1] != ams2.shape[-1]:
+            raise ValueError(f"The two arrays of adjacency matrices' dimensions do not match: "
+                             f"{ams1.shape} and {ams2.shape}.")
 
     def _set_parameters(self, *args, **kwargs):
         pass
 
     def __call__(self, x1: Ranking, x2: Ranking, use_rv: bool = True) -> float:
         """
-        Computes the Mallows kernel between two rankings, which is based on the difference in their rankings adjusted by a
-        kernel bandwidth parameter nu.
+        Kernel between two rankings.
 
-        Parameters:
-        - x1 (Ranking): The first ranking as a RankVector or RankByte.
-        - x2 (Ranking): The second ranking as a RankVector or RankByte.
-        - nu (float, 'auto'): The decay parameter for the kernel. If 'auto', it adjusts based on the length of the rankings.
-        - use_rv (bool): Determines whether to use the rank vector or byte representation for the calculation.
-
-        Returns:
-        - float: The computed Mallows kernel value.
-
-        Raises:
-        - ValueError: If the rankings do not have the same number of alternatives.
-        """
-        self._validate_inputs(x1, x2)
-        # self.set_parameters(na=len(x1) if use_rv else np.sqrt(len(x1)))
-
-        return self._rv(x1, x2) if use_rv else self._bytes(x1, x2)
-
-    def _bytes(self, b1: RankByte, b2: RankByte) -> float:
-        pass
-
-    def _rv(self, r1: RankVector, r2: RankVector) -> float:
-        pass
-
-    def _gram_matrix_naive(self, s1: ru.SampleAM, s2: ru.SampleAM, use_rv: bool = True) -> np.ndarray[float]:
-        """
-        Computes the Gram matrix between two samples of rankings, where each entry in the matrix represents the kernel
-        similarity between the rankings from each sample.
-
-        Parameters:
-        - sample1 (SampleAM): The first sample of rankings.
-        - sample2 (SampleAM): The second sample of rankings.
-        - use_rv (bool): If True, converts the rankings to rank function matrix format before processing.
-        - kernel (Kernel): The kernel function to use for computing similarities.
-        - **kernelargs: Additional keyword arguments for the kernel function.
-
-        Returns:
-        - np.ndarray[float]: A matrix of kernel similarities.
-        """
-
-        if use_rv:
-            s1 = s1.to_rank_vector_matrix().T  # rows: voters, cols: alternatives
-            s2 = s2.to_rank_vector_matrix().T  #
-
-        out = np.zeros((len(s1), len(s2)))
-        if np.equal(s1, s2).all():
-            for i2, x2 in enumerate(s2):
-                for i1, x1 in list(enumerate(s1))[:i2]:
-                    out[i1, i2] = self(x1, x2, use_rv)
-            d = np.diag([self(x, x, use_rv) for x in s1])
-            return out + d + out.T
-        else:
-            for (i1, x1), (i2, x2) in product(enumerate(s1), enumerate(s2)):
-                out[i1, i2] = self(x1, x2, use_rv)
-            return out
-
-    def _gram_matrix_scalar(self, *args) -> np.ndarray[float]:
-        """
-        Use as base for the vectorized gram matrix.
         Parameters
         ----------
-        args :
+        x1, x2 : RankVector or RankByte
+            The two rankings, as rank vectors (``use_rv=True``) or as bytes of adjacency matrices (``use_rv=False``).
+        use_rv : bool
+            Whether the inputs are rank vectors.
 
         Returns
         -------
+        float
+            The kernel, in [0, 1].
+        """
+        self._validate_inputs(x1, x2)
+        return self._rv(x1, x2) if use_rv else self._bytes(x1, x2)
 
+    def _bytes(self, b1: RankByte, b2: RankByte) -> float:
+        raise NotImplementedError
+
+    def _rv(self, r1: RankVector, r2: RankVector) -> float:
+        raise NotImplementedError
+
+    def _gram_matrix_naive(self, s1: ru.SampleAM, s2: ru.SampleAM, use_rv: bool = True) -> np.ndarray[float]:
+        """
+        Gram matrix between two samples of rankings, evaluating the kernel on every pair (reference implementation).
+
+        Parameters
+        ----------
+        s1, s2 : ru.SampleAM
+            The two samples of rankings.
+        use_rv : bool
+            If True, the rankings are converted to rank vectors before evaluating the kernel.
+
+        Returns
+        -------
+        np.ndarray
+            out[i, j] = k(s1[i], s2[j]).
+        """
+        if use_rv:
+            s1 = s1.to_rank_vector_matrix().T  # rows: rankings, cols: alternatives
+            s2 = s2.to_rank_vector_matrix().T
+
+        out = np.zeros((len(s1), len(s2)))
+        if len(s1) == len(s2) and np.array_equal(s1, s2):
+            for i2, x2 in enumerate(s2):
+                for i1 in range(i2):
+                    out[i1, i2] = self(s1[i1], x2, use_rv)
+            d = np.diag([self(x, x, use_rv) for x in s1])
+            return out + d + out.T
+        for i1, x1 in enumerate(s1):
+            for i2, x2 in enumerate(s2):
+                out[i1, i2] = self(x1, x2, use_rv)
+        return out
+
+    def _gram_matrix_scalar(self, x1, x2) -> np.ndarray[float]:
+        """
+        Gram matrix between two sets of rankings in the kernel's input format (see ``gram_matrix``).
+        Leading (batch) dimensions are broadcast.
         """
         raise NotImplementedError()
 
-    def _gram_matrix_vectorized(self, *args) -> np.ndarray[float]:
-        raise NotImplementedError()
+    def _gram_matrix_vectorized(self, x1, x2) -> np.ndarray[float]:
+        return self._gram_matrix_scalar(x1, x2)
 
     def gram_matrix(self, sample1, sample2=None) -> np.ndarray[float]:
+        """
+        Gram matrix between two samples of rankings, K[i, j] = k(sample1[i], sample2[j]).
+
+        Parameters
+        ----------
+        sample1 : ru.SampleAM or np.ndarray
+            A sample of rankings, or an array already in the kernel's input format: a rank matrix of shape
+            (na, n) for ``BordaKernel`` and ``JaccardKernel``, an array of adjacency matrices of shape (n, na, na)
+            for ``MallowsKernel``. Arrays can have leading batch dimensions, in which case one Gram matrix is
+            computed per batch.
+        sample2 : same as sample1, optional
+            The second sample. If None, sample1 is used.
+
+        Returns
+        -------
+        np.ndarray
+            The Gram matrix, of shape (..., n1, n2).
+        """
         x1 = self._convert_sample_to_input_format(sample1)
         x2 = x1 if sample2 is None else self._convert_sample_to_input_format(sample2)
         try:
@@ -172,10 +228,12 @@ class RankingKernel(base.Kernel):
             case _:
                 raise ValueError(f"Unsupported input format: {self.vectorized_input_format}")
 
-    def _convert_sample_to_input_format(self, s: ru.SampleAM):
+    def _convert_sample_to_input_format(self, s: ru.UniverseAM):
 
-        if not isinstance(s, ru.SampleAM):
+        if not isinstance(s, ru.UniverseAM):
             return s
+        if not isinstance(s, ru.SampleAM):
+            s = s.view(ru.SampleAM)
 
         na = int(np.sqrt(len(s[0])))
 
@@ -195,49 +253,25 @@ class RankingKernel(base.Kernel):
 
     def _mmd_distribution_naive(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0, disjoint: bool = True,
                                 replace: bool = False) -> np.ndarray[float]:
-
+        """MMD of every pair of subsamples, evaluating the kernel on every pair of rankings (slow, reference)."""
         ms1, ms2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed, disjoint=disjoint, replace=replace)
-
-        ms1 = ru.MultiSampleAM(ms1)
-        ms2 = ru.MultiSampleAM(ms2)
 
         mmd = []
         for s1, s2 in zip(ms1, ms2):
             s1 = ru.SampleAM(s1)
             s2 = ru.SampleAM(s2)
 
-            rv1 = s1.to_rank_vector_matrix()
-            rv2 = s2.to_rank_vector_matrix()
+            Kxx = self._gram_matrix_naive(s1, s1)
+            Kyy = self._gram_matrix_naive(s2, s2)
+            Kxy = self._gram_matrix_naive(s1, s2)
 
-            n = len(s1)
-
-            Kxx = np.empty((n, n))
-            diag = np.empty((n))
-            for i, r1 in enumerate(rv1.T):
-                diag[i] = self(r1, r1)
-                for j, r2 in enumerate(rv1.T[:i]):
-                    Kxx[i, j] = self(r1, r2)
-            Kxx = Kxx + Kxx.T + np.diag(diag)
-
-            Kyy = np.empty((n, n))
-            diag = np.empty((n))
-            for i, r1 in enumerate(rv2.T):
-                diag[i] = self(r1, r1)
-                for j, r2 in enumerate(rv2.T[:i]):
-                    Kyy[i, j] = self(r1, r2)
-            Kyy = Kyy + Kyy.T + np.diag(diag)
-
-            Kxy = np.empty((n, n))
-            for i, r1 in enumerate(rv1.T):
-                for j, r2 in enumerate(rv2.T):
-                    Kxy[i, j] = self(r1, r2)
-
-            mmd.append(np.sqrt(Kxx.mean() + Kyy.mean() - 2 * Kxy.mean()))
+            mmd.append(np.sqrt(np.abs(Kxx.mean() + Kyy.mean() - 2 * Kxy.mean())))
 
         return np.array(mmd)
 
     def _mmd_distribution_vectorized(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0, disjoint: bool = True,
                                      replace: bool = False) -> np.ndarray[float]:
+        """MMD of every pair of subsamples, from the three (batched) Gram matrices of every pair."""
         ms1, ms2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed, disjoint=disjoint, replace=replace)
 
         ms1 = ru.MultiSampleAM(ms1)
@@ -255,6 +289,10 @@ class RankingKernel(base.Kernel):
     def _mmd_distribution_embedding(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0,
                                     disjoint: bool = True, replace: bool = False,
                                     use_cached_support_matrix: bool = False) -> np.ndarray[float]:
+        """
+        MMD of every pair of subsamples, as sqrt(alpha^T K alpha), where alpha is the difference of the empirical
+        pmfs of the pair over the support and K is the Gram matrix of the support (computed once).
+        """
 
         if use_cached_support_matrix and self.support is None:
             raise ValueError("To cache the support matrix, self.support must be set.")
@@ -280,100 +318,16 @@ class RankingKernel(base.Kernel):
         # product is never formed. The absolute value is to avoid machine 0-s.
         return np.sqrt(np.abs(np.einsum("ir,ir->r", alpha, self.K @ alpha)))
 
-    # def _mmd_distribution_embedding(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0, disjoint: bool = True,
-    #                                 replace: bool = False, use_cached_support_matrix: bool = False) -> np.ndarray[
-    #     float]:
-    #
-    #     ms1, ms2 = sample.get_multisample_pair(subsample_size=n, rep=rep, seed=seed, disjoint=disjoint, replace=replace)
-    #
-    #     ms1 = ru.MultiSampleAM(ms1)
-    #     ms2 = ru.MultiSampleAM(ms2)
-    #
-    #     pmf_df1 = ms1.get_pmfs_df(self.support)
-    #     pmf_df2 = ms2.get_pmfs_df(self.support)
-    #
-    #     # ms1[0] is compared to ms2[0] etc...
-    #     # equivalently, pmf_df1.iloc[:, 0] is compared with pmf_df2.iloc[:, 0]
-    #     alpha_df = pmf_df1 - pmf_df2
-    #     alpha_df = alpha_df.fillna(pmf_df1).fillna(-pmf_df2)  # if a ranking does not appear in both is an NaN
-    #
-    #     alpha = alpha_df.values
-    #
-    #     if use_cached_support_matrix:
-    #         if self.support is None:
-    #             raise ValueError("To cache the support matrix, self.support must be set.")
-    #         if self.K is not None:
-    #             return np.sqrt(np.abs(np.diag(alpha.T @ self.K @ alpha)))
-    #
-    #     # get the kernel matrix from the index of alpha (the support)
-    #     support = self.support if self.support is not None else ru.SampleAM(alpha_df.index.values)
-    #     x = self._convert_sample_to_input_format(support)
-    #     self.K = self.gram_matrix(x, x)
-    #
-    #     # the absolute value is to avoid machine 0-s.
-    #     out = np.einsum("ir,ir->r", alpha, self.K @ alpha)
-    #     # out = np.diag(alpha.T @ self.K @ alpha  # old
-    #     return np.sqrt(np.abs(out))
-
     def _mmd_icdf_approximation(self, sample: ru.SampleAM, n: int, rep: int, alpha_min: float = 0.6,
                                 alpha_max: float = 1) -> np.ndarray[float]:
         """
-        Iterated approximations of the CDF of the MMD.
-            1. MMD^2 = sum of chi squares (from asymptotic behavior of the MMD^2)
-            2. sum of chi squares = chi square (from moment matching)
-            3. chi square = normal (Wilson-Hilferty method)
-            4. approximate the normal CDF and ICDF
-
-        The approximation is trustworthy for values of alpha between alpha_min = 0.6 and alpha_max < 1
-
-        Returns
-        -------
-
+        Close-form approximation of the quantile function (ICDF) of the MMD at `rep` equispaced levels in
+        [alpha_min, alpha_max). See ``base.approximate_mmd_icdf``.
         """
-
-        if alpha_min < 0.6:
-            warnings.warn("The approximation of the MMD might not be reliable for alpha_min < 0.6.")
-        if alpha_max > 1:
-            raise ValueError("The maximum value of alpha_max is 1.")
-
         support, pmf = sample.get_support_pmf()
         x = self._convert_sample_to_input_format(support)
         K = self.gram_matrix(x, x)
-
-        m = len(support)
-        C = np.eye(m) - 1 / m * np.ones((m, m))
-        H = C @ K @ C
-
-        Th = H @ np.diag(pmf)
-
-        lam = np.linalg.eigvalsh(Th)
-
-        L1 = np.sum(lam)
-        L2 = np.sum(lam ** 2)
-        L3 = np.sum(np.triu(np.outer(lam, lam), 1))
-        L4 = 3 * L2 + 2 * L3
-
-        # constant and dof of chi square, see Solomon et Stephens (1977)
-        # r = 1  # here just for consistency with the source, where they do not fix it
-        a = (L4 - L1 ** 2) / L1
-        k = 2 * L1 ** 2 / (L4 - L1 ** 2)
-
-        def normal2chisq(z: np.array, k: float, a: float):
-            """
-            Inverse of the Wilson-Hilferty (WH) approximation of a chi square with a normal.
-            WH(a*chisq(k)) = normal(0, 1)
-            WH_inv(normal(0, 1), a, k) = a*chisq(k)
-            """
-            return (np.sqrt(2 / (9 * k)) * z + (1 - 2 / (9 * k))) ** 3 * a * k
-
-        def normal_ICDF(alpha: np.array):
-            """
-            ICDF of the normal(0, 1) from Lin (1989)'s CDF approximation
-            """
-            return -0.861779 + 0.00120192 * np.sqrt(514089 - 1.664 * 10 ** 6 * np.log(2 * (1 - alpha)))
-
-        alpha = np.linspace(alpha_min, alpha_max, rep, endpoint=False)
-        return np.sqrt(normal2chisq(normal_ICDF(alpha), k, a)) / np.sqrt(n)
+        return base.approximate_mmd_icdf(K, pmf, n=n, rep=rep, alpha_min=alpha_min, alpha_max=alpha_max)
 
     # TODO implement
     @staticmethod
@@ -381,17 +335,49 @@ class RankingKernel(base.Kernel):
         return "embedding"
 
     def mmd_distribution(self, sample: ru.SampleAM, n: int, rep: int, seed: int = 0, disjoint: bool = True,
-                         replace: bool = False,
-                         method: Literal["auto", "naive", "vectorized", "embedding", "approximation"] = "auto",
+                         replace: bool = False, method: MMDMethod = "auto",
                          use_cached_support_matrix: bool = False, alpha_min=0.7, alpha_max=1) -> np.ndarray[float]:
+        """
+        Estimate the distribution of the MMD between two samples of n rankings drawn from `sample`.
+
+        Parameters
+        ----------
+        sample : ru.SampleAM
+            The rankings to draw the pairs of subsamples from.
+        n : int
+            Size of each subsample.
+        rep : int
+            Number of pairs of subsamples, i.e., size of the output.
+        seed : int
+            Random seed for the subsampling.
+        disjoint : bool
+            If True, the two subsamples are drawn from two disjoint halves of `sample`.
+        replace : bool
+            If True, the subsamples are drawn with replacement.
+        method : {"auto", "naive", "vectorized", "embedding", "approximation"}
+            - "embedding" (default with "auto", fast): MMD from the difference of the empirical pmfs.
+            - "vectorized": MMD from the Gram matrices of every pair of subsamples.
+            - "naive" (slow): as "vectorized", evaluating the kernel on every pair of rankings.
+            - "approximation": close-form approximation; the output is NOT a sample of the MMD, but its
+              quantile function evaluated at `rep` equispaced levels in [alpha_min, alpha_max).
+        use_cached_support_matrix : bool
+            For method="embedding": reuse the Gram matrix of ``self.support`` across calls.
+        alpha_min, alpha_max : float
+            For method="approximation": the range of quantile levels.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (rep, ).
+        """
 
         if method == "auto":
             method = self._select_fastest_mmd_estimation_method()
 
         match method:
             case "naive":
-                raise ValueError(
-                    "The basic estimation method is too slow and not implemented. Please choose another one.")
+                return self._mmd_distribution_naive(sample, n=n, rep=rep, seed=seed,
+                                                    disjoint=disjoint, replace=replace)
             case "vectorized":
                 return self._mmd_distribution_vectorized(sample, n=n, rep=rep, seed=seed,
                                                          disjoint=disjoint, replace=replace)
@@ -401,19 +387,37 @@ class RankingKernel(base.Kernel):
                                                         use_cached_support_matrix=use_cached_support_matrix)
             case "approximation":
                 warnings.warn("The output of calling the function with method=approximation is not a sample of the MMD"
-                              "but its icdf.")
+                              " but its icdf.")
                 return self._mmd_icdf_approximation(sample, n=n, rep=rep, alpha_min=alpha_min, alpha_max=alpha_max)
             case _:
                 raise ValueError(f"Invalid method {method}.")
 
     def mmd_distribution_many_n(self, sample: ru.SampleAM, nmin: int, nmax: int, step: int,
                                 seed: int = 100, disjoint: bool = True, replace: bool = False, N: int = None,
-                                method: Literal["auto", "naive", "vectorized", "embedding", "approximation"] = "auto",
-                                **mmd_distribution_parms) -> pd.DataFrame:
+                                method: MMDMethod = "auto", **mmd_distribution_parms) -> pd.DataFrame:
+        """
+        Run ``mmd_distribution`` for n in range(nmin, nmax, step) (seed * n is the seed for size n).
+
+        Parameters
+        ----------
+        sample, seed, disjoint, replace, method :
+            See ``mmd_distribution``.
+        nmin, nmax, step : int
+            The subsample sizes n, as in ``range(nmin, nmax, step)``.
+        N : int, optional
+            Size of `sample`, only stored in the output.
+        **mmd_distribution_parms :
+            Passed to ``mmd_distribution`` (e.g., rep, use_cached_support_matrix).
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: n, mmd, method, N, disjoint, replace, kernel.
+        """
         mmds = {
             n: self.mmd_distribution(sample=sample, n=n, seed=seed * n, disjoint=disjoint, replace=replace,
                                      method=method, **mmd_distribution_parms)
-            for n in range(nmin, nmax, step)}
+            for n in range(nmin, nmax+1, step)}
 
         dfmmd = pd.DataFrame(mmds).melt(var_name="n", value_name="mmd")
         dfmmd["method"] = method
@@ -426,40 +430,46 @@ class RankingKernel(base.Kernel):
 
 
 class BordaKernel(RankingKernel):
+    """
+    Borda kernel: k(r1, r2) = exp(-nu * |b1 - b2|), where b is the number of alternatives ranked no better than the
+    alternative of interest (its Borda count).
+
+    Goal: the results should agree on the position of one alternative.
+
+    Parameters
+    ----------
+    idx : int, optional
+        Index (row) of the alternative of interest. Exactly one of idx and alternative must be passed.
+    alternative : str, optional
+        Name of the alternative of interest; requires ordered_alternatives.
+    nu : float or "auto"
+        Bandwidth. "auto" sets nu = 1 / (na - 1) and requires na.
+    na : int, optional
+        Number of alternatives.
+    ordered_alternatives : array-like, optional
+        Names of the alternatives, in the order of the rows of the rank matrices.
+
+    Examples
+    --------
+    >>> k = BordaKernel(idx=0, na=4)
+    >>> k(np.array([0, 1, 2, 3]), np.array([3, 2, 1, 0]))   # exp(-1)
+    """
     vectorized_input_format = "vector"
 
     def __init__(self, idx: int = None, alternative: str = None, nu: Union[float, Literal["auto"]] = "auto",
                  na: int = None, ordered_alternatives: np.ndarray = None, **kwargs) -> None:
-        """
-        If nu is auto, you need na. if idx is None, you need ordered_alternatives.
-
-
-        Parameters
-        ----------
-        idx :
-        alternative :
-        nu :
-        na :
-        ordered_alternatives :
-        kwargs :
-        """
-
         super().__init__(**kwargs)
-        # TODO let idx be the name of an alternative
+        if alternative is None and idx is None:
+            raise ValueError("Exactly one of alternative and idx must be specified.")
+        elif alternative is not None and idx is not None:
+            raise ValueError("Exactly one of alternative and idx must be specified.")
         self.alternative = alternative
         self.idx = idx
-        if self.alternative is None and self.idx is None:
-            raise ValueError("Exactly one of alternative and idx must be specified.")
-        elif self.alternative is not None and self.idx is not None:
-            raise ValueError("Exactly of alternative and idx must be specified.")
+        self.na = na
 
         self.nu = nu
         self._set_parameters(na=na, ordered_alternatives=ordered_alternatives)
         self._validate_parameters()
-
-        self._gram_matrix_vectorized = np.vectorize(self._gram_matrix_scalar,
-                                                    signature="(na, n), (na, n) -> (n, n)", otypes=[float],
-                                                    excluded="self")
 
     def __repr__(self):
         return f"BordaKernel(nu={self.nu:.5f}, idx={self.idx})"
@@ -467,37 +477,33 @@ class BordaKernel(RankingKernel):
     def latex_str(self):
         return fr"$k_\text{{b}}^{{\nu={self.nu:.3f}, a^*={self.idx}}}$"
 
-    def get_eps(self, delta, na: int = None):
-        if self.nu == "auto":
-            return np.sqrt(2 * (1 - np.exp(-delta)))
-        else:
-            # Use nu / nu_auto.
-            # delta is the difference between the fraction of dominated alternatives between two rankings
-            return np.sqrt(2 * (1 - np.exp(-self.nu * na * delta)))
+    def get_eps(self, delta: float, na: int = None) -> float:
+        """
+        epsilon(delta) = sqrt(2 * (1 - exp(-nu * (na - 1) * delta))), where delta is the maximum difference between
+        the fractions of alternatives ranked no better than the alternative of interest (|b1 - b2| / (na - 1)).
+        """
+        na = self._resolve_na(na)
+        return np.sqrt(2 * (1 - np.exp(-self.nu * (na - 1) * delta)))
 
     def _validate_parameters(self):
-        if isinstance(self.nu, str):
-            if self.nu != "auto":
-                raise ValueError(f"Invalid value for parameter nu={self.nu}. Accepted: positive float or 'auto'")
-        elif isinstance(self.nu, float):
-            if self.nu < 0:
-                raise ValueError(f"Invalid value for parameter nu={self.nu}. Accepted: positive float or 'auto'")
-        else:
-            raise ValueError(f"Invalid value for parameter nu={self.nu}. Accepted: positive float or 'auto'")
+        self.nu = _validate_bandwidth("nu", self.nu)
 
-        if isinstance(self.idx, int):
-            pass
-        else:
+        if isinstance(self.idx, bool) or not isinstance(self.idx, numbers.Integral):
             raise ValueError(f"Invalid value for parameter idx={self.idx}. Accepted: int")
+        self.idx = int(self.idx)
+        if self.na is not None and not 0 <= self.idx < self.na:
+            raise ValueError(f"Parameter idx={self.idx} is out of range for na={self.na} alternatives.")
 
     def _validate_inputs(self, x1: Ranking, x2: Ranking):
         if len(x1) != len(x2):
-            raise ValueError(f"The rankings hav different lengths {len(x1)} and {len(x2)}")
+            raise ValueError(f"The rankings have different lengths {len(x1)} and {len(x2)}")
+        na = len(x1)
         if isinstance(x1, RankByte):
-            if np.sqrt(len(x1)) != int(np.sqrt(len(x1))):
+            na = int(np.sqrt(len(x1)))
+            if na ** 2 != len(x1):
                 raise ValueError(f"The input bytestring has length {len(x1)} and is not a square (adjacency) matrix.")
-        if self.idx >= len(x1):
-            raise ValueError(f"The idx must not exceed the length of the rankings.")
+        if self.idx >= na:
+            raise ValueError(f"The idx must not exceed the number of alternatives.")
 
     def _set_parameters(self, na: int = None, ordered_alternatives: np.array = None):
         if self.nu == "auto":
@@ -508,103 +514,80 @@ class BordaKernel(RankingKernel):
         if self.idx is None and self.alternative is not None:
             if ordered_alternatives is None:
                 raise ValueError("If idx is None, parameter ordered_alternatives has to be passed.")
-            self.idx = ordered_alternatives.tolist().index(self.alternative)
+            ordered_alternatives = list(np.asarray(ordered_alternatives))
+            if self.alternative not in ordered_alternatives:
+                raise ValueError(f"Alternative {self.alternative} is not among the alternatives.")
+            self.idx = ordered_alternatives.index(self.alternative)
 
     def _rv(self, r1: RankVector, r2: RankVector) -> float:
         return np.exp(- self.nu * np.abs(np.sum(r1 >= r1[self.idx]) - np.sum(r2 >= r2[self.idx])))
 
     def _bytes(self, b1: RankByte, b2: RankByte) -> float:
-        raise NotImplementedError
+        # row idx of the adjacency matrix: A[idx, j] = r[idx] <= r[j], i.e., the Borda count of idx
+        na = int(np.sqrt(len(b1)))
+        d1 = np.frombuffer(b1, dtype=np.int8).reshape(na, na)[self.idx].astype(int).sum()
+        d2 = np.frombuffer(b2, dtype=np.int8).reshape(na, na)[self.idx].astype(int).sum()
+        return np.exp(- self.nu * np.abs(d1 - d2))
 
     def _gram_matrix_scalar(self, rv1: RankVector, rv2: RankVector):
         """
-        Computes the Gram matrix of the Borda kernel between two sets of rankings, represented as vectors.
-
-        The Borda kernel is a similarity measure between two rankings,
-        based on the number of elements that are ranked higher than a given element in each ranking.
+        Gram matrix of the Borda kernel between two sets of rankings, represented as rank matrices.
 
         Parameters
         ----------
         rv1 : RankVector
-            The first set of rankings, represented as a tensor of shape (na, n),
-            where na is the number of alternatives, and n is the number of rankings.
+            Rank matrix of shape (..., na, n): column j is the rank vector of ranking j.
         rv2 : RankVector
-            The second set of rank vectors, with the same shape as rv1.
-        idx : int
-            The index of the element to compare the rankings for.
-        nu : float or "auto", optional
-            The scaling parameter for the kernel. If "auto", it is set to 2 / (na*(na-1)),
-            where na is the number of elements. The default is "auto".
+            Rank matrix of shape (..., na, m).
 
         Returns
         -------
-        ndarray
-            A tensor of shape (n, n) representing the Gram matrix of the Borda kernel between the two sets of
-            rankings.
-
-        Raises
-        ------
-        ValueError
-            If the two tensors do not have the same shape.
-
-        See Also
-        --------
-        RankVector : Class representing a ranking.
-
-        Notes
-        -----
-        The Borda kernel is defined as:
-
-        .. math::
-            K(R_1, R_2) = exp(-nu * |d_1 - d_2|)
-
-        where :math:`R_1` and :math:`R_2` are rank vectors, :math:`d_1` is the number of elements
-        ranked higher than the element at index `idx` in :math:`R_1`, and :math:`d_2` is the
-        number of elements ranked higher than the element at index `idx` in :math:`R_2`.
-
-        Examples
-        --------
+        np.ndarray
+            Array of shape (..., n, m), K[..., i, j] = exp(-nu * |d1[i] - d2[j]|), where d is the number of
+            alternatives ranked no better than alternative idx.
         """
         self._validate_vectorized_inputs_rv(rv1, rv2)
-        # self._set_parameters(na=rv1.shape[0], ordered_alternatives=)
 
-        d1 = np.sum(rv1 >= rv1[self.idx], axis=0)  # dominated
-        d2 = np.sum(rv2 >= rv2[self.idx], axis=0)
-        return np.exp(- self.nu * np.abs(np.expand_dims(d1, axis=1) - np.expand_dims(d2, axis=0)))
+        d1 = np.sum(rv1 >= rv1[..., [self.idx], :], axis=-2)  # dominated, (..., n)
+        d2 = np.sum(rv2 >= rv2[..., [self.idx], :], axis=-2)  # (..., m)
+        return np.exp(- self.nu * np.abs(d1[..., :, None] - d2[..., None, :]))
 
 
 class JaccardKernel(RankingKernel):
+    """
+    Jaccard kernel: k(r1, r2) = |T1 & T2| / |T1 | T2|, where T is the set of alternatives in the top-t tiers.
+
+    Goal: the results should agree on the best alternatives.
+
+    Parameters
+    ----------
+    t : int
+        Number of top tiers considered (t=1: only the best alternatives, including ties).
+    """
     vectorized_input_format = "vector"
 
     def __init__(self, t: int, **kwargs) -> None:
-        super().__init__()
+        super().__init__(**kwargs)
         self.t = t
         self._validate_parameters()
-
-        self._gram_matrix_vectorized = np.vectorize(self._gram_matrix_scalar,
-                                                    signature="(na, n), (na, n) -> (n, n)", otypes=[float],
-                                                    excluded="self")
 
     def __repr__(self):
         return f"JaccardKernel(t={self.t})"
 
-    def get_eps(self, delta, na: int = None):
+    def get_eps(self, delta: float, na: int = None) -> float:
+        """epsilon(delta) = sqrt(2 * delta), where delta is the maximum Jaccard distance 1 - k."""
         return np.sqrt(2 * (1 - (1 - delta)))
 
     def _validate_parameters(self):
-        if not isinstance(self.t, int):
-            raise ValueError(f"Invalid value for parameter t={self.t}. Accepted: int")
+        if isinstance(self.t, bool) or not isinstance(self.t, numbers.Integral) or self.t < 1:
+            raise ValueError(f"Invalid value for parameter t={self.t}. Accepted: positive int")
+        self.t = int(self.t)
 
     def _bytes(self, b1: RankByte, b2: RankByte) -> float:
-        """
-        Implementation is specific for AdjacencyMatrix objects, version of 25.01.2024.
-        """
         na = int(np.sqrt(len(b1)))
-
-        topk1 = np.where(np.frombuffer(b1, dtype=np.int8).reshape((na, na)).sum(axis=1) > na - self.t)[0]
-        topk2 = np.where(np.frombuffer(b2, dtype=np.int8).reshape((na, na)).sum(axis=1) > na - self.t)[0]
-
-        return len(set(topk1).intersection(set(topk2))) / len(set(topk1).union(set(topk2)))
+        r1 = ru.AdjacencyMatrix.from_bytes(b1, (na, na)).to_rank_vector()
+        r2 = ru.AdjacencyMatrix.from_bytes(b2, (na, na)).to_rank_vector()
+        return self._rv(r1, r2)
 
     def _rv(self, r1: RankVector, r2: RankVector) -> float:
         """
@@ -617,50 +600,27 @@ class JaccardKernel(RankingKernel):
 
     def _gram_matrix_scalar(self, rv1: RankVector, rv2: RankVector):
         r"""
-        Computes the Gram matrix of the Jaccard kernel between two sets of rankings.
-
-        The Jaccard kernel is a similarity measure between two sets of rankings,
-        based on the number of elements ranked within a given cutoff in each ranking.
+        Gram matrix of the Jaccard kernel between two sets of rankings, represented as rank matrices.
 
         Parameters
         ----------
         rv1 : RankVector
-            The first set of rankings, represented as a tensor of shape (na, n),
-            where na is the number of alternatives, and n is the number of vectors.
+            Rank matrix of shape (..., na, n): column j is the rank vector of ranking j (dense ranks, 0 = best).
         rv2 : RankVector
-            The second set of rank vectors, with the same shape as rv1.
-        k : int
-            The cutoff value for the ranking.
+            Rank matrix of shape (..., na, m).
 
         Returns
         -------
-        ndarray99
-            A tensor of shape (n, n) representing the Gram matrix of the Jaccard kernel between the two sets of
-            rankings.
-
-        See Also
-        --------
-        RankVector : Class representing a ranking.
-
-        Notes
-        -----
-        The Jaccard kernel is defined as:
-
-        .. math::
-            K(R_1, R_2) = \frac{|R_1 \cap R_2|}{|R_1 \cup R_2|}
-
-        where :math:`R_1` and :math:`R_2` are rank vectors, and :math:`R_1 \cap R_2`
-        represents the set of elements ranked within the cutoff `k` in both vectors, and
-        :math:`R_1 \cup R_2` represents the set of elements ranked within the cutoff `k`
-        in either vector.
+        np.ndarray
+            Array of shape (..., n, m), K[..., i, j] = |T_i \cap T_j| / |T_i \cup T_j|, with T the set of
+            alternatives with rank < t.
         """
         self._validate_vectorized_inputs_rv(rv1, rv2)
-        # self.set_parameters(na=rv1.shape[0])
 
-        k1 = rv1 < self.t
-        k2 = rv2 < self.t
-        intersection = np.logical_and(np.expand_dims(k1, 2), np.expand_dims(k2, 1)).astype(int).sum(axis=0)
-        union = np.logical_or(np.expand_dims(k1, 2), np.expand_dims(k2, 1)).astype(int).sum(axis=0)
+        k1 = (rv1 < self.t).astype(float)  # (..., na, n)
+        k2 = (rv2 < self.t).astype(float)  # (..., na, m)
+        intersection = np.swapaxes(k1, -1, -2) @ k2  # (..., n, m), exact integer counts
+        union = k1.sum(axis=-2)[..., :, None] + k2.sum(axis=-2)[..., None, :] - intersection
         return intersection / union
 
     def latex_str(self):
@@ -668,38 +628,41 @@ class JaccardKernel(RankingKernel):
 
 
 class MallowsKernel(RankingKernel):
+    """
+    Mallows kernel: k(r1, r2) = exp(-nu * n_d(r1, r2)), where n_d is the number of discordant pairs of alternatives
+    (a pair tied in one ranking only counts 1/2).
+
+    Goal: the results should agree on the whole ranking.
+
+    Parameters
+    ----------
+    nu : float or "auto"
+        Bandwidth. "auto" sets nu = 1 / binom(na, 2) and requires na.
+    na : int, optional
+        Number of alternatives.
+    """
     vectorized_input_format = "adjmat"
 
     def __init__(self, nu: Union[float, Literal["auto"]] = "auto", na: int = None, **kwargs) -> None:
         super().__init__(**kwargs)
+        self.na = na
         self.nu = nu
         self._set_parameters(na)
         self._validate_parameters()
 
-        self._gram_matrix_vectorized = np.vectorize(self._gram_matrix_scalar,
-                                                    signature="(n, na, na), (n, na, na) -> (n, n)", otypes=[float],
-                                                    excluded="self")
-
     def __repr__(self):
         return f"MallowsKernel(nu={self.nu:.5f})"
 
-    def get_eps(self, delta, na: int = None):
-        if self.nu == "auto":
-            return np.sqrt(2 * (1 - np.exp(-delta)))
-        else:
-            # Use nu / nu_auto
-            # delta is the fraction of discordant pairs
-            return np.sqrt(2 * (1 - np.exp(- self.nu * (na * (na - 1)) / 2 * delta)))
+    def get_eps(self, delta: float, na: int = None) -> float:
+        """
+        epsilon(delta) = sqrt(2 * (1 - exp(-nu * binom(na, 2) * delta))), where delta is the maximum fraction of
+        discordant pairs.
+        """
+        na = self._resolve_na(na)
+        return np.sqrt(2 * (1 - np.exp(- self.nu * (na * (na - 1)) / 2 * delta)))
 
     def _validate_parameters(self):
-        if isinstance(self.nu, str):
-            if self.nu != "auto":
-                raise ValueError(f"Invalid value for parameter nu={self.nu}. Accepted: positive float or 'auto'")
-        elif isinstance(self.nu, float):
-            if self.nu < 0:
-                raise ValueError(f"Invalid value for parameter nu={self.nu}. Accepted: positive float or 'auto'")
-        else:
-            raise ValueError(f"Invalid value for parameter nu={self.nu}. Accepted: positive float or 'auto'")
+        self.nu = _validate_bandwidth("nu", self.nu)
 
     def _set_parameters(self, na):
         if self.nu == "auto":
@@ -713,62 +676,42 @@ class MallowsKernel(RankingKernel):
         return np.exp(- self.nu * np.sum(np.abs(i1 - i2)) / 2)
 
     def _rv(self, r1: RankVector, r2: RankVector) -> float:
-        out = 0  # twice the number of discordant pairs ((tie, not-tie) counts as 1/2 discordant)
-        for i in range(len(r1)):
-            for j in range(i):
-                out += np.abs(np.sign(r1[i] - r1[j]) - np.sign(r2[i] - r2[j]))
+        # twice the number of discordant pairs ((tie, not-tie) counts as 1/2 discordant)
+        r1 = np.asarray(r1, dtype=np.int64)
+        r2 = np.asarray(r2, dtype=np.int64)
+        s1 = np.sign(r1[:, None] - r1[None, :])
+        s2 = np.sign(r2[:, None] - r2[None, :])
+        out = np.abs(s1 - s2).sum() / 2  # every unordered pair appears twice
         return np.exp(- self.nu * out / 2)
 
     def _gram_matrix_scalar(self, ams1: ru.AdjacencyMatrix, ams2: ru.AdjacencyMatrix):
         r"""
-        Computes the Gram matrix of the Mallows kernel between two sets of rankings,
-        represented as adjacency matrices.
-
-        The Mallows kernel is a similarity measure between two adjacency matrices,
-        based on the number of discordant pairs between the two corresponding rankings.
+        Gram matrix of the Mallows kernel between two sets of rankings, represented as adjacency matrices.
 
         Parameters
         ----------
-        ams1 : ru.AdjacencyMatrix
-            The first set of adjacency matrices, represented as a tensor of shape (n, na, na),
-            where n is the number of matrices, and na is the number of alternatives.
-        ams2 : ru.AdjacencyMatrix
-            The second set of adjacency matrices, with the same shape as ams1.
-        nu : float or "auto", optional
-            The scaling parameter for the kernel. If "auto", it is set to 2 / (na*(na-1)),
-            where na is the number of alternatives. The default is "auto".
+        ams1 : np.ndarray
+            Adjacency matrices, of shape (..., n, na, na).
+        ams2 : np.ndarray
+            Adjacency matrices, of shape (..., m, na, na).
 
         Returns
         -------
-        ndarray
-            A tensor of shape (n, n) representing the Gram matrix of the  Mallows kernel between
-            the two sets of adjacency matrices.
-
-        Raises
-        ------
-        ValueError
-            If the two tensors do not have the same shape.
-
-        See Also
-        --------
-        ru.AdjacencyMatrix : Class representing a ranking.
+        np.ndarray
+            Array of shape (..., n, m), K[..., i, j] = exp(-nu/2 * \sum_{a, b} |A_i[a, b] - A_j[a, b]|).
 
         Notes
         -----
-        The Mallows kernel is defined as:
-
-        .. math::
-            K(A_1, A_2) = exp(-nu/2 * \sum_{i < j} |A_{1, i, j} - A_{2, i, j}|)
-
-        where :math:`A_1` and :math:`A_2` are adjacency matrices, and :math:`nu` is a scaling parameter.
-
-        Examples
-        --------
+        For binary vectors, the number of differing entries is |a| + |b| - 2 a.b, so the counts come from a
+        single matrix product instead of an (n, m, na, na) tensor.
         """
         self._validate_vectorized_inputs_ams(ams1, ams2)
-        # self._set_parameters(na=ams1.shape[1])
 
-        ndisc = np.logical_xor(np.expand_dims(ams1, axis=1), np.expand_dims(ams2, axis=0)).sum(axis=(-1, -2))
+        na = ams1.shape[-1]
+        a1 = (np.asarray(ams1) != 0).reshape(*ams1.shape[:-2], na * na).astype(float)  # (..., n, na^2)
+        a2 = (np.asarray(ams2) != 0).reshape(*ams2.shape[:-2], na * na).astype(float)  # (..., m, na^2)
+        ndisc = (a1.sum(axis=-1)[..., :, None] + a2.sum(axis=-1)[..., None, :]
+                 - 2 * (a1 @ np.swapaxes(a2, -1, -2)))  # exact integer counts
         return np.exp(-self.nu / 2 * ndisc)
 
     def latex_str(self):

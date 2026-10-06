@@ -1,4 +1,4 @@
-# Paths for the outputs.
+# Paths for the outputs (relative to the directory of this file).
 paths:
   outputs_dir: outputs
   figures_dir: figures
@@ -11,21 +11,22 @@ project_parameters:
   delete_existing_results: False
   verbose: True
 
-# Parameters for the reliability study:
-  # alpha specifies the desired level of reliability;
+# Parameters for the external validity analysis:
+  # alpha is the desired probability that two studies of the same size yield similar results;
   # delta is used to set a condition on the minimum desired value of the kernel
     # borda: max difference in relative position of 'idx' for two rankings to be similar
-    # jaccard: minimum intersection over union between top-k tiers for two rankings to be similar
+    # jaccard: max 1 - (intersection over union) between the top-t tiers for two rankings to be similar
     # mallows: max fraction of discordant pairs for two rankings to be similar
-  # seed is the random seed passed to np.random.default_rng
+    # rbf: max mean squared difference between the scores for two results to be similar
+  # seed is the random seed of the simulated studies (null: not reproducible)
   # rep is the number of pairs of subsamples used to estimate the distribution of the MMD
   # tol_missing_alternatives: maximum allowed fraction of missing alternatives for a condition to be kept
     # e.g., if tol_missing_alternatives = 0.2: if an experiment evaluates 7/10 alternatives, it is filtered out from the analysis
   # tol_missing_conditions: maximum allowed fraction of missing experiments for an alternative to be kept
   # e.g., if tol_missing_conditions = 0.2: if an alternative is evaluated in 78/100 experiments, it is filtered out from the analysis
-  # Nmax is the maximum size of the simulated preliminary study (sample size to compute n-reliability)
+  # Nmax is the maximum size of the simulated preliminary study (sample size to compute the external validity of studies of size n)
     # set to `null` to impose no upper boundary
-# The other defining parameter for a reliability analysis, delta, is defined for every kernel differently,
+# The other defining parameter for an external validity analysis, delta, is defined for every kernel differently,
 # as it has different interpretations (see below).
 parameters:
   alpha:
@@ -46,24 +47,23 @@ parameters:
   tol_missing_conditions: 0.2
   Nmax: 100
 
-
 # The following entries define the data and how to interpret it.
     # the dataset is stored in dataset_path. Its primary key consists of the experimental factors + alternatives.
 
-  # An experimental factor is a variable influencing the outcome of an experiment. Here, it's a column of 'dataset'.
-  # We distinguish between "fixed" and "random" factors. Fixed factors define configurations, and an independent
-    # reliability analysis is performed for every configuration. Random factors are those factors for which we want
-    # results to be reliable.
-  # Distinguish factors in the following way:
-    # fixed factors
-      # factor_name: level_name --- to only select that specific level
-      # OR
-      # factor_name: "_all" --- to loop over all levels
-    # random factors
-      # factor_name: null
+# An experimental factor is a variable influencing the outcome of an experiment. Here, it's a column of 'dataset'.
+# We distinguish between "fixed" and "random" factors. Fixed factors define configurations, and an independent
+  # external validity analysis is performed for every configuration. Random factors are those factors for which we want
+  # results to be externally valid.
+# Distinguish factors in the following way:
+  # fixed factors
+    # factor_name: level_name --- to only select that specific level
+    # OR
+    # factor_name: "_all" --- to loop over all levels
+  # random factors
+    # factor_name: null
 
-  # target: the name of the column, the alternatives are ranked according to it.
-  # alternatives the name of the column listed the compared methods
+  # target_col_name: the name of the column the alternatives are ranked according to.
+  # alternatives_col_name: the name of the column listing the compared alternatives
   # target_is_error: set to False if the target column contains a score (e.g., as output of sklearn.metrics.accuracy_score),
     # to True if it contains an error (e.g., as output of sklearn.metrics.mean_squared_error). If the results contain multiple metrics,
     # they ALL HAVE TO BE EITHER SCORES OR ERRORS
@@ -77,26 +77,26 @@ data:
   target_col_name: "score_value"
   target_is_error: False
 
-# Parameteres controlling the iid sampling from valid experimental conditions, to approximate the
+# Parameters controlling the iid sampling from valid experimental conditions, to approximate the
 # true distribution of results and compute the MMD between pairs of studies.
-# disjoint and replace are ignored if the method passed to pm.reliability_analysis is "approximation"
+# disjoint and replace are ignored if the method passed to pm.validity_analysis is "approximation"
   # sample_size: increment in sample size N
   # disjoint: if True, compute MMD on two disjoint samples of experimental conditions
   # replace: if True, compute MMD on two samples of experimental conditions, with replacement
 # We interpret combinations of disjoint and replace as follows:
-  # disjoint = true, replace = true: pessimistic setting, MMD is biased upwardly and reliability downwardly
-  # disjoint = true, replace = false: realistic setting, no duplicate conditions
-  # disjoint = false, replace = false: optimistic setting, MMD is biased downwardly and reliability upwardly
-  # disjoint = false, replace = true: --- setting, without clear biases
+  # disjoint = true, replace = true: overpessimistic setting, MMD is biased upwardly and external validity downwardly
+  # disjoint = true, replace = false: permutation, no duplicate conditions
+  # disjoint = false, replace = false: overoptimistic setting, MMD is biased downwardly and external validity upwardly
+  # disjoint = false, replace = true: bootstrap
 sampling:
   sample_size: 10
-  disjoint: true
-  replace: false
+  disjoint: false
+  replace: true
 
 
 # How the predicted number of necessary experiments nstar is computed. The estimation is always made by estimating the
 # ICDF (inverse CDF, or quantile function) of the MMD. The estimation methods are used by a RankingKernel object.
-#  As such, the implementation of the kernel should have hte appropriate methods. More details are in kernels.py.
+#  As such, the implementation of the kernel should have the appropriate methods. More details are in genexpy/kernels/rankings.py.
 #  Possible values:
   # approximation (almost instant): based on a close-formula approximating the ICDF of the MMD
   # naive (VERY slow, deprecated if other methods are available): get a pair of samples of results, compute their MMD, estimate the ICDF of the MMD.
@@ -104,8 +104,8 @@ sampling:
   # embedding (fast, recommended): use an equivalent definition of the MMD to speed up the estimation
 nstar_estimation_methods:
   rankings:
-    - "embedding"
     - "approximation"
+    - "embedding"
   vectors:
     - "naive"
     - "approximation"
@@ -114,12 +114,13 @@ nstar_estimation_methods:
   # kernel: the name of a subclass of genexpy.kernels.base.Kernel
   # params: the parameters of a kernel as defined in kernels.py. A list of values
 kernels:
+
   - name: "BordaKernel"
     params:
       alternative: # alternative of interest
         - "GPT GPT-3 Small"
       nu:
-        - "auto"                  # kernel bandwidth, auto = 1 /  na
+        - "auto"                  # kernel bandwidth, auto = 1 / (na - 1)
 
   - name: "JaccardKernel"
     params:
@@ -128,7 +129,7 @@ kernels:
 
   - name: "MallowsKernel"
     params:
-      nu:                         # kernel bandwidth, auto = 1 /  binom(na, 2)
+      nu:                         # kernel bandwidth, auto = 1 / binom(na, 2)
         - "auto"
 
   - name: "RBFKernel"

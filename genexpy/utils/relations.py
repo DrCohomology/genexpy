@@ -1,11 +1,13 @@
 """
 Utility module to deal with relations.
 
-Including conversion functions from rankings (arrays) to adjacency matrices and scores.
+Conversion of scores (or errors) into rank vectors: rank 0 is the best, tied values get the same rank,
+and ranks are dense (0, 1, 1, 2 rather than 0, 1, 1, 3).
 """
 
 import numpy as np
 import pandas as pd
+
 
 def score2rv(score: pd.Series, lower_is_better: bool = True, impute_missing: bool = True) -> pd.Series:
     """
@@ -16,16 +18,16 @@ def score2rv(score: pd.Series, lower_is_better: bool = True, impute_missing: boo
     score : pd.Series
         The scores to be ranked.
     lower_is_better : bool, optional
-        Whether lower scores are better. If True, lower scores will be assigned higher ranks.
-        If False, higher scores will be assigned higher ranks. The default is True.
+        Whether lower scores are better, i.e., get lower (better) ranks. The default is True.
     impute_missing : bool, optional
-        Whether to impute missing values in the score. If True, missing values will be
-        imputed with the maximum score. The default is True.
+        Whether to impute missing values. If True, missing values are imputed with the worst score
+        (the maximum if lower_is_better, the minimum otherwise), i.e., they tie with the worst alternative.
+        If False, missing values get a missing rank. The default is True.
 
     Returns
     -------
     pd.Series
-        A Series containing the ranks of the elements in 'score.index'.
+        The (dense) rank of the elements in 'score.index', 0 being the best.
 
     Examples
     --------
@@ -43,9 +45,9 @@ def score2rv(score: pd.Series, lower_is_better: bool = True, impute_missing: boo
     dtype: int64
     """
     if impute_missing:
-        score = score.fillna(score.max())
-    c = 1 if lower_is_better else -1
-    return score.map({s: sorted(score.unique(), key=lambda x: c * x).index(s) for s in score.unique()})
+        score = score.fillna(score.max() if lower_is_better else score.min())
+    out = score.rank(method="dense", ascending=lower_is_better) - 1
+    return out if out.isna().any() else out.astype(np.int64)
 
 
 def vec2rv(vec: np.ndarray[int | float], lower_is_better: bool = True) -> np.ndarray:
@@ -57,13 +59,12 @@ def vec2rv(vec: np.ndarray[int | float], lower_is_better: bool = True) -> np.nda
     vec : np.ndarray
         The array to be ranked.
     lower_is_better : bool, optional
-        Whether lower values are better. If True, lower values will be assigned higher ranks.
-        If False, higher values will be assigned higher ranks. The default is True.
+        Whether lower values are better, i.e., get lower (better) ranks. The default is True.
 
     Returns
     -------
     np.ndarray
-        An array containing the ranks of the elements in 'vec'.
+        The (dense) rank of the elements of 'vec', 0 being the best.
 
     Examples
     --------
@@ -75,6 +76,6 @@ def vec2rv(vec: np.ndarray[int | float], lower_is_better: bool = True) -> np.nda
     """
     c = 1 if lower_is_better else -1
     # Unique sorted values and their inverse to rebuild the original array
-    _, inverse = np.unique(c * vec, return_inverse=True)
+    _, inverse = np.unique(c * np.asarray(vec), return_inverse=True)
     # Use the inverse indices which map each original value to its rank
     return inverse

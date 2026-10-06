@@ -1,13 +1,23 @@
 """
 Utility module with probability distributions over rankings.
+
+Every distribution samples rankings of `na` alternatives (or from a given support) and returns them as a
+``genexpy.utils.rankings.SampleAM``. Distributions keep their own random generator: successive calls to
+``sample`` return different (but reproducible, given the seed) samples.
+
+- ``UniformDistribution``: uniform over all rankings (with or without ties).
+- ``DegenerateDistribution`` / ``MDegenerateDistribution``: concentrated on one / m rankings.
+- ``SpikeDistribution``: rankings close (w.r.t. a kernel) to a center are more likely.
+- ``PMFDistribution``: arbitrary pmf over a support, e.g., the empirical distribution of a sample.
 """
-import builtins
 import math
 import numpy as np
 import time
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from functools import lru_cache
+from numbers import Integral
 from scipy.special import factorial, stirling2
 from typing import Literal, Union
 
@@ -16,8 +26,8 @@ from .utils import rankings as ru
 
 
 def get_unique_ranks_distribution(n, exact=False, normalized=True):
-    """
-    Calculates the distribution of unique ranks in rankings of length 'n'.
+    r"""
+    Calculates the distribution of the number of unique ranks in uniformly random rankings of length 'n'.
 
     A ranking with ties has a different number of unique ranks. For instance,
     0112 has 3 unique ranks. This function computes the probability of
@@ -40,21 +50,47 @@ def get_unique_ranks_distribution(n, exact=False, normalized=True):
 
     Notes
     -----
-    The distribution is calculated using the following formula:
-
-    .. math::
-        P(k) = \frac{n! S(n, k)}{n!}
-
-    where :math:`S(n, k)` is the Stirling number of the second kind, representing
-    the number of ways to partition a set of 'n' elements into 'k' non-empty
-    subsets.
-
-    The terms n(n-1)/2 + 1 to n(n+1)/2 in T(n, k) in https://oeis.org/A019538
-    correspond to the number of rankings with k unique ranks.
+    The number of rankings of n alternatives with k unique ranks is :math:`k! S(n, k)`, where :math:`S(n, k)` is
+    the Stirling number of the second kind, i.e., the number of ways to partition a set of 'n' elements into 'k'
+    non-empty subsets. See also the terms n(n-1)/2 + 1 to n(n+1)/2 of T(n, k) in https://oeis.org/A019538.
     """
     out = factorial(np.arange(n)+1, exact=exact) * stirling2(n, np.arange(n)+1, exact=exact)
     out = out.astype(float)
     return out / out.sum() if normalized else out
+
+
+@lru_cache(maxsize=None)
+def _ordered_partitions_table(n: int) -> tuple:
+    """
+    T[m][k] = k! S(m, k), the number of rankings of m alternatives with exactly k tiers, as exact integers,
+    from T(m, k) = k * (T(m-1, k-1) + T(m-1, k)).
+    """
+    T = [[0] * (n + 1) for _ in range(n + 1)]
+    T[0][0] = 1
+    for m in range(1, n + 1):
+        for k in range(1, m + 1):
+            T[m][k] = k * (T[m - 1][k - 1] + T[m - 1][k])
+    return tuple(tuple(row) for row in T)
+
+
+def _to_ranking_bytes(x):
+    """Encode a ranking given as bytes, AdjacencyMatrix (2-D) or rank vector (1-D) as the bytes of its adjacency
+    matrix. None is returned unchanged."""
+    if x is None or isinstance(x, bytes):
+        return None if x is None else bytes(x)
+    x = np.asarray(x)
+    if x.ndim == 2:
+        return ru.AdjacencyMatrix(x).tohashable()
+    if x.ndim == 1:
+        return ru.AdjacencyMatrix.from_rank_vector(x).tohashable()
+    raise ValueError(f"Cannot interpret an object of shape {x.shape} as a ranking.")
+
+
+def _repeat_rankings(elements: list, reps: int) -> ru.SampleAM:
+    """SampleAM holding `elements` (bytes) tiled `reps` times."""
+    out = np.empty(len(elements) * reps, dtype=object)
+    out[:] = list(elements) * reps
+    return out.view(ru.SampleAM)
 
 
 class FunctionDefaultDict(defaultdict):
@@ -92,6 +128,7 @@ class FunctionDefaultDict(defaultdict):
             The value returned by the function for the missing key.
         """
         return self.func(key)
+
 
 class ProbabilityDistribution(ABC):
     """
@@ -137,6 +174,8 @@ class ProbabilityDistribution(ABC):
     -------
     sample(n: int, **kwargs) -> ru.SampleAM
         Samples 'n' rankings from the distribution.
+    multisample(n: int, nm: int, **kwargs) -> ru.MultiSampleAM
+        Samples 'nm' samples of 'n' rankings.
     """
 
     def __init__(self, support: ru.SampleAM = None, na: int = None, ties: bool = True, seed: int = None):
@@ -146,9 +185,9 @@ class ProbabilityDistribution(ABC):
                 raise ValueError("Specify the number of alternatives or a support")
             self.na = na
         else:
-            self.na = support.get_na()
             if len(self.support) == 0:
                 raise ValueError("The input list is empty.")
+            self.na = support.get_na()
 
         self.pmf = defaultdict(lambda: 0)  # TODO: refactor as pd.Series (better for multisamples)
         self.ties = ties
@@ -159,11 +198,11 @@ class ProbabilityDistribution(ABC):
 
     def _check_valid_element(self, x):
         """
-        Checks if an element is valid for the distribution.
+        Checks if an element (bytes of an adjacency matrix) is valid for the distribution.
 
         Parameters
         ----------
-        x : ru.AdjacencyMatrix or bytes
+        x : bytes
             The element to check.
 
         Raises
@@ -181,7 +220,7 @@ class ProbabilityDistribution(ABC):
 
     def _sample_from_support(self, n: int, **kwargs):
         """
-        Samples rankings from the support.
+        Samples rankings uniformly, with replacement, from the support.
 
         Parameters
         ----------
@@ -193,7 +232,7 @@ class ProbabilityDistribution(ABC):
         ru.SampleAM
             A sample of rankings from the support.
         """
-        return self.support.get_subsample(subsample_size=n, seed=self.seed, use_key=False, replace=True)
+        return self.support.get_subsample(subsample_size=n, seed=self.rng, use_key=False, replace=True)
 
     @abstractmethod
     def _sample_from_na(self, n: int, **kwargs) -> ru.SampleAM:
@@ -258,16 +297,19 @@ class ProbabilityDistribution(ABC):
 
     def multisample(self, n: int, nm: int, **kwargs) -> ru.MultiSampleAM:
         """
-        Samples 'm' samples of 'n' rankings from the distribution.
+        Samples 'nm' samples of 'n' rankings from the distribution.
+
         Parameters
         ----------
-        n : size of the samples
-        nm : number of samples
-        kwargs :
+        n : int
+            Size of the samples.
+        nm : int
+            Number of samples.
 
         Returns
         -------
-
+        ru.MultiSampleAM
+            Array of shape (nm, n).
         """
 
         return ru.MultiSampleAM([self.sample(n, **kwargs) for _ in range(nm)])
@@ -276,38 +318,53 @@ class ProbabilityDistribution(ABC):
         """Returns a string representation of the distribution."""
         return f"{self.name}(na={self.na}, ties={self.ties})"
 
+
 class UniformDistribution(ProbabilityDistribution):
     """
     Uniform distribution over rankings.
 
-    This class represents a uniform distribution over all possible rankings
-    of a given number of alternatives.
+    With ties=True (default), every ranking with ties of `na` alternatives (weak order) is equally likely;
+    with ties=False, every permutation is. If a support is given, its elements are sampled uniformly.
 
     Parameters
     ----------
-    *args :
-        Arguments passed to the ProbabilityDistribution constructor.
-    **kwargs :
-        Keyword arguments passed to the ProbabilityDistribution constructor.
+    support : ru.SampleAM, optional
+        If given, sample uniformly from it.
+    na : int, optional
+        Number of alternatives, required if support is None.
+    ties : bool
+        Whether ties are allowed.
+    seed : int, optional
+        Random seed.
 
-    Methods
-    -------
-    _sample_from_na(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the uniform distribution based on the number of alternatives.
-    _sample_from_na_noties(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the uniform distribution without ties.
+    Examples
+    --------
+    >>> distr = UniformDistribution(na=5, seed=42)
+    >>> sample = distr.sample(100)        # ru.SampleAM of 100 rankings
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # self.pmf = FunctionDefaultDict(lambda x: 1 / self.na)
         self.name = "Uniform"
+        self._block_sizes = {}  # cache of the distributions of the size of the top tier
+
+    def _top_tier_size_distribution(self, m: int, k: int):
+        """Sizes j and probabilities of the top tier of a uniformly random ranking of m alternatives with k tiers:
+        P(j) = binom(m, j) T(m - j, k - 1) / T(m, k)."""
+        if (m, k) not in self._block_sizes:
+            T = _ordered_partitions_table(self.na)
+            js = np.arange(1, m - k + 2)
+            p = np.array([math.comb(m, int(j)) * T[m - j][k - 1] / T[m][k] for j in js])
+            self._block_sizes[(m, k)] = (js, p / p.sum())
+        return self._block_sizes[(m, k)]
 
     def _sample_from_na(self, n: int, **kwargs) -> ru.SampleAM:
         """
-        Samples rankings from the uniform distribution based on the number of alternatives.
+        Samples rankings uniformly among all rankings with ties of na alternatives.
 
-        This method uses a sampling strategy based on the number of unique ranks
-        in the rankings.
+        1. The number of tiers k is drawn from its distribution (see get_unique_ranks_distribution).
+        2. The sizes of the tiers are drawn sequentially, from the best tier down, from their exact conditional
+           distribution, which makes every ranking with k tiers equally likely.
+        3. The alternatives are randomly assigned to the tiers.
 
         Parameters
         ----------
@@ -320,25 +377,17 @@ class UniformDistribution(ProbabilityDistribution):
             A sample of rankings from the uniform distribution.
         """
         nurs = self.rng.choice(np.arange(self.na) + 1, p=get_unique_ranks_distribution(self.na), size=n)  # number of unique ranks
-        rf = []
-        for nur in nurs:
-            # create an array of length n. Then, for all ranks, sample indices from a pool and assign that rank
-            pool = np.arange(self.na)
-            out = np.empty(self.na, dtype=int)
-            for ir, rank in enumerate(self.rng.choice(np.arange(nur), replace=False, size=nur)):  # shuffle the ranks
-                # last iteration: assign rank to remaning indices
-                if ir == nur - 1:
-                    out[pool] = rank
-                    break
-
-                idx = self.rng.choice(pool, replace=True, size=len(pool) - (nur - ir) + 1)
-                out[idx] = rank
-                pool = np.setdiff1d(pool, idx)
-
-            assert np.isin(np.arange(nur), out).all(), "Not all ranks were used"
-
-            rf.append(out)
-        return ru.SampleAM.from_rank_vector_matrix(np.array(rf).T)
+        rf = np.empty((n, self.na), dtype=int)
+        for i, nur in enumerate(nurs):
+            sizes = []
+            m = self.na
+            for k in range(nur, 0, -1):  # tiers left to fill
+                js, p = self._top_tier_size_distribution(m, k)
+                j = int(self.rng.choice(js, p=p)) if len(js) > 1 else int(js[0])
+                sizes.append(j)
+                m -= j
+            rf[i, self.rng.permutation(self.na)] = np.repeat(np.arange(nur), sizes)
+        return ru.SampleAM.from_rank_vector_matrix(rf.T)
 
     def _sample_from_na_noties(self, n: int, **kwargs) -> ru.SampleAM :
         """
@@ -374,36 +423,31 @@ class DegenerateDistribution(ProbabilityDistribution):
         Arguments passed to the ProbabilityDistribution constructor.
     **kwargs :
         Keyword arguments passed to the ProbabilityDistribution constructor.
-    element : ru.AdjacencyMatrix, optional
+    element : bytes, ru.AdjacencyMatrix, or rank vector, optional
         The ranking on which the distribution is concentrated. If None, it is
-        sampled from the uniform distribution. The default is None.
-
-    Methods
-    -------
-    _sample_from_na(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the degenerate distribution based on the number of alternatives.
-    _sample_from_na_noties(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the degenerate distribution without ties.
+        sampled from the uniform distribution at the first call of `sample`, and kept afterwards.
+        The default is None.
     """
     def __init__(self, *args, element: ru.AdjacencyMatrix = None, **kwargs):
         super().__init__(*args, **kwargs)
-        # self.pmf = FunctionDefaultDict(lambda x: 1 / self.na)
+        element = _to_ranking_bytes(element)
         self._check_valid_element(element)
         self._uniform = UniformDistribution(self.support, self.na, ties=self.ties, seed=self.seed)
         self.element = element
         self.name = "Degenerate"
 
+    def _get_element(self) -> bytes:
+        if self.element is None:
+            self.element = self._uniform.sample(1)[0]
+        return self.element
+
     def _sample_from_support(self, n: int, **kwargs):
-        if self.element is not None:
-            return ru.SampleAM(np.array([self.element]*n))
-        else:
-            return np.tile(UniformDistribution(support=self.support, na=self.na, seed=self.seed).sample(1), n)
+        return _repeat_rankings([self._get_element()], n)
 
     def _sample_from_na(self, n: int, **kwargs):
-        if self.element is not None:
-            return ru.SampleAM(np.array([self.element] * n))
-        else:
-            return np.tile(self._uniform.sample(1), n)
+        return _repeat_rankings([self._get_element()], n)
+
+    _sample_from_na_noties = _sample_from_na
 
 
 class MDegenerateDistribution(ProbabilityDistribution):
@@ -411,7 +455,7 @@ class MDegenerateDistribution(ProbabilityDistribution):
     Multi-degenerate distribution concentrated on multiple rankings.
 
     This class represents a distribution where all probability mass is
-    concentrated on a set of 'm' rankings.
+    concentrated (uniformly) on a set of 'm' rankings. Samples contain every element the same number of times.
 
     Parameters
     ----------
@@ -419,56 +463,51 @@ class MDegenerateDistribution(ProbabilityDistribution):
         Arguments passed to the ProbabilityDistribution constructor.
     **kwargs :
         Keyword arguments passed to the ProbabilityDistribution constructor.
-    elements : ru.UniverseAM, optional
+    elements : ru.UniverseAM or iterable of rankings, optional
         The set of rankings on which the distribution is concentrated. If None,
-        it is sampled from the uniform distribution. The default is None.
+        they are sampled from the uniform distribution at the first call of `sample`, and kept afterwards.
+        The default is None.
     m : int, optional
         The number of rankings on which the distribution is concentrated.
         Required if elements is None. The default is None.
-
-    Methods
-    -------
-    _sample_from_na(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the multi-degenerate distribution based on the number of alternatives.
-    _sample_from_na_noties(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the multi-degenerate distribution without ties.
     """
     def __init__(self, *args, elements: ru.UniverseAM = None, m: int = None, **kwargs):
         super().__init__(*args, **kwargs)
-        # self.pmf = FunctionDefaultDict(lambda x: 1 / self.na)
         self._uniform = UniformDistribution(self.support, self.na, ties=self.ties, seed=self.seed)
-        self.elements = elements
-        if self.elements is not None:
-            for element in self.elements:
+        if elements is not None:
+            elements = [_to_ranking_bytes(element) for element in elements]
+            for element in elements:
                 self._check_valid_element(element)
-        else:
-            if m is None:
-                raise ValueError("Either the elements or m must be specified.")
-        self.m = len(self.elements) if self.elements else m
+        elif m is None:
+            raise ValueError("Either the elements or m must be specified.")
+        self.elements = elements
+        self.m = len(self.elements) if self.elements is not None else m
         self.name = f"{self.m}Degenerate"
 
+    def _get_elements(self) -> list:
+        if self.elements is None:
+            self.elements = list(self._uniform.sample(self.m))
+        return self.elements
+
     def _sample_from_support(self, n: int, **_):
-        assert n % self.m == 0, "n must be divisible by m."
-        if self.elements is not None:
-            return np.tile(self.elements, n // self.m)
-        else:
-            elements = UniformDistribution(support=self.support, na=self.na, seed=self.seed).sample(self.m)
-            return np.tile(elements, n // self.m)
+        if n % self.m != 0:
+            raise ValueError("n must be divisible by m.")
+        return _repeat_rankings(self._get_elements(), n // self.m)
 
     def _sample_from_na(self, n: int, **_):
-        assert n % self.m == 0, "n must be divisible by m."
-        if self.elements is not None:
-            return np.tile(self.elements, n // self.m)
-        else:
-            elements = self._uniform.sample(self.m)
-            return np.tile(elements, n // self.m)
+        if n % self.m != 0:
+            raise ValueError("n must be divisible by m.")
+        return _repeat_rankings(self._get_elements(), n // self.m)
+
+    _sample_from_na_noties = _sample_from_na
+
 
 class SpikeDistribution(ProbabilityDistribution):
     """
     Sample rankings with probability proportional to their kernel to a given center.
 
     This class represents a distribution where the probability of sampling a
-    ranking is proportional to its kernel distance to a given center ranking.
+    ranking is proportional to its kernel to a given center ranking.
     The returned sample always contains the center ranking.
 
     Parameters
@@ -477,53 +516,42 @@ class SpikeDistribution(ProbabilityDistribution):
         Arguments passed to the ProbabilityDistribution constructor.
     **kwargs :
         Keyword arguments passed to the ProbabilityDistribution constructor.
-    center : ru.AdjacencyMatrix, optional
+    center : bytes, ru.AdjacencyMatrix, or rank vector, optional
         The center ranking of the distribution. If None, it is sampled from
-        the uniform distribution. The default is None.
-    kernel : ku.Kernel, optional
-        The kernel function used to calculate distances to the center. The
-        default is ku.mallows_kernel.
-    kernelargs : dict, optional
-        Additional arguments to pass to the kernel function. The default is
-        None.
+        the uniform distribution at the first call of `sample`, and kept afterwards. The default is None.
+    kernel : ku.RankingKernel
+        The kernel used to weight the rankings.
     uniform_size_sample : Union[Literal["auto", "n"], int], optional
         The size of the uniform sample used to calculate the kernels to the
         center. If "auto", the size is set to the factorial of the number of
         alternatives. If "n", the size is set to the size of the Spike sample
         as input in self._sample_from_na. If an integer, it is used as the
         sample size. The default is "n".
-
-    Methods
-    -------
-    _sample_from_na(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the Spike distribution based on the number of alternatives.
-    _sample_from_na_noties(n: int, **kwargs) -> ru.SampleAM
-        Samples rankings from the Spike distribution without ties.
     """
 
     def __init__(self, *args, center: ru.AdjacencyMatrix = None, kernel: ku.RankingKernel,
                  uniform_size_sample: Union[Literal["auto", "n"], int] = "n", **kwargs):
         super().__init__(*args, **kwargs)
+        center = _to_ranking_bytes(center)
         self._check_valid_element(center)
         self._uniform = UniformDistribution(self.support, self.na, ties=self.ties, seed=self.seed)
         self.center = center
 
-        match uniform_size_sample:  # size of the uniform sample used to calculate the kernels to the center
-            case "auto": self.uniform_size_sample = math.factorial(self.na)
-            case "n": self.uniform_size_sample = "n"  # n is the size of the Spike sample as input in self._sample_from_na
-            case builtins.int: self.uniform_size_sample = uniform_size_sample
-        self.uniform_size_sample = math.factorial(self.na) if uniform_size_sample == "auto" else uniform_size_sample
+        # size of the uniform sample used to calculate the kernels to the center
+        if uniform_size_sample == "auto":
+            self.uniform_size_sample = math.factorial(self.na)
+        elif uniform_size_sample == "n":  # n is the size of the Spike sample as input in self._sample_from_na
+            self.uniform_size_sample = "n"
+        elif isinstance(uniform_size_sample, Integral) and not isinstance(uniform_size_sample, bool):
+            self.uniform_size_sample = int(uniform_size_sample)
+        else:
+            raise ValueError(f"Invalid uniform_size_sample={uniform_size_sample}. Accepted: 'auto', 'n', or int.")
         self.kernel = kernel
         self.name = f"Spike"
 
-
     def _ntmp(self, n: int):
         """
-        Helper function to determine the uniform sample size.
-
-        This function determines the size of the uniform sample used to
-        calculate the kernels to the center based on the value of
-        `uniform_size_sample`.
+        Size of the uniform sample used to calculate the kernels to the center.
 
         Parameters
         ----------
@@ -535,14 +563,9 @@ class SpikeDistribution(ProbabilityDistribution):
         int
             The size of the uniform sample.
         """
-        # get the sample size from the uniform distribution
         if self.uniform_size_sample == "n":
             return n
-        elif isinstance(self.uniform_size_sample, int):
-            return self.uniform_size_sample
-        else:
-            raise ValueError(f"Unsupported uniform_size_sample with type {type(self.uniform_size_sample)}")
-
+        return self.uniform_size_sample
 
     def _sample_from_na(self, n: int, **_):
         """
@@ -551,7 +574,7 @@ class SpikeDistribution(ProbabilityDistribution):
         This method samples 'n' rankings from the distribution, ensuring that
         the center ranking is included in the sample. It first samples a
         uniform sample of rankings and then weights the probability of each
-        ranking based on its kernel distance to the center.
+        ranking based on its kernel to the center.
 
         Parameters
         ----------
@@ -563,7 +586,9 @@ class SpikeDistribution(ProbabilityDistribution):
         ru.SampleAM
             An array of rankings sampled from the distribution.
         """
-        self.centertmp = self.center or self._uniform.sample(1)[0]
+        if self.center is None:
+            self.center = self._uniform.sample(1)[0]
+        self.centertmp = self.center
         unif_sample = self._uniform.sample(self._ntmp(n)).append(self.centertmp)  # add center to sample
         pmf = np.array([self.kernel(self.centertmp, x, use_rv=False) for x in unif_sample])
         self.unif_sample = unif_sample
@@ -573,31 +598,10 @@ class SpikeDistribution(ProbabilityDistribution):
 
     def _sample_from_na_noties(self, n: int, **kwargs):
         """
-        Samples rankings from the Spike distribution without ties.
-
-        This method samples 'n' rankings from the distribution without ties,
-        ensuring that the center ranking is included in the sample. It first
-        samples a uniform sample of rankings without ties and then weights the
-        probability of each ranking based on its kernel distance to the
-        center.
-
-        Parameters
-        ----------
-        n : int
-            The number of rankings to sample.
-
-        Returns
-        -------
-        ru.SampleAM
-            An array of rankings sampled from the distribution without ties.
+        Samples rankings from the Spike distribution without ties (the uniform sample has no ties).
         """
-        # unif_sample = self._uniform.sample(self._ntmp(n)).merge(self.center)  # add center to sample
-        # pmf = np.array([self.kernel(self.center, x, **self.kernelargs) for x in unif_sample])
-        # self.unif_sample = unif_sample
-        # self.pmf = pmf
-        #
-        # return ru.SampleAM(self.rng.choice(unif_sample, size=n, replace=True, p=pmf/pmf.sum()))
         return self._sample_from_na(n, **kwargs)
+
 
 class PMFDistribution(ProbabilityDistribution):
     """
@@ -611,56 +615,44 @@ class PMFDistribution(ProbabilityDistribution):
     ----------
     pmf : np.ndarray
         Array of probability masses corresponding to elements in the support.
+    support : ru.SampleAM
+        The rankings with positive probability.
     *args : tuple
         Additional positional arguments passed to the parent class.
     **kwargs : dict
-        Additional keyword arguments passed to the parent class. Must include 'support'.
+        Additional keyword arguments passed to the parent class (e.g., seed).
 
     Raises
     ------
     ValueError
-        If the support is not specified.
-    ValueError
         If the length of the support and the PMF do not match.
 
-    Attributes
-    ----------
-    pmf : np.ndarray
-        The probability mass function array.
-    name : str
-        Name of the distribution, set to "PMF".
-
-    Methods
-    -------
-    from_sample(sample, **kwargs)
-        Creates a PMFDistribution from a sample by extracting its PMF and support.
-    sample(n, **kwargs)
-        Generates a sample of size `n` based on the PMF.
-    __str__()
-        Returns a string representation of the distribution.
+    Examples
+    --------
+    >>> distr = PMFDistribution.from_sample(sample, seed=0)   # empirical distribution of `sample`
+    >>> resample = distr.sample(50)                            # 50 rankings drawn with replacement
     """
-
 
     def __init__(self, pmf: np.ndarray, support: ru.SampleAM, *args, **kwargs):
         super().__init__(support, *args, **kwargs)
-        self.pmf = pmf
+        self.pmf = np.asarray(pmf, dtype=float)
         self.name = "PMF"
         self.support = support
 
-        # if self.support is None:
-        #     raise ValueError("Universe must be specified for a PMFDistribution.")
         if len(self.support) != len(self.pmf):
             raise ValueError("The length of support and pmf must coincide.")
 
     @classmethod
     def from_sample(cls, sample: ru.SampleAM, **kwargs):
+        """Empirical distribution of `sample`. kwargs (e.g., seed) are passed to the constructor."""
         support, pmf = sample.get_support_pmf()
-        return PMFDistribution(support=support, pmf=pmf, **kwargs)
+        return cls(support=support, pmf=pmf, **kwargs)
 
     def _sample_from_na(self, n: int, **kwargs):
         raise NotImplementedError("Not possible to sample without a support.")
 
     def sample(self, n: int, **kwargs) -> ru.SampleAM:
+        """Sample n rankings, with replacement, according to the pmf."""
         return ru.SampleAM(self.rng.choice(self.support, n, replace=True, p=self.pmf/self.pmf.sum()))
 
     def __str__(self):
