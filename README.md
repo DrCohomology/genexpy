@@ -76,13 +76,6 @@ the best rank is 0 instead of 1. The paper describes the theory in detail.
 
 genexpy requires Python >= 3.13.
 
-### Standard installation ⚠️ **not anonymous**
-
-The latest release (and relevant dependencies) can be installed from PyPI:
-```bash
-pip install genexpy
-```
-
 ### Anonymized repository
 
 To install genexpy in a virtual environment:
