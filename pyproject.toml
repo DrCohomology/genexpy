@@ -3,7 +3,7 @@ name = "genexpy"
 version = "1.2."
 description = "External validity of experimental studies and rankings utilies"
 authors = [
-    {name = "Federico Matteucci",email = "federico.matteucci@kit.edu"}
+    {name = "Federico Matteucci",email = "federico.matteucci@outlook.com"}
 ]
 license = {text = "MIT License"}
 readme = "README.md"
